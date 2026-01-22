@@ -33,7 +33,7 @@
 | 🎤 **語音轉錄** | 本地語音轉文字（免費、無需 API Key） | faster-whisper |
 | 👁️ **視覺分析** | 分析影片畫面（動態 8-10 幀、並行處理） | MiniCPM-V |
 | 📝 **AI 摘要** | 整合語音與畫面生成繁體中文摘要 | Ollama + Qwen2.5 |
-| 📚 **Roam Research 同步** | 本地 Markdown + Claude Code MCP 自動同步 | Markdown + MCP |
+| 📚 **Roam Research 同步** | 本地備份 + 可選自動同步至 Roam | Claude Code + Roam MCP |
 | 🔄 **失敗重試** | 自動重試失敗的任務（最多 3 次） | APScheduler |
 | ⚡ **並行處理** | 幀分析支援並行加速 | asyncio |
 
@@ -44,6 +44,16 @@
 - **語音轉錄**：faster-whisper（本地運行）
 - **視覺分析**：MiniCPM-V（本地運行）
 - **摘要生成**：Ollama + Qwen2.5（本地運行）
+
+### 🔗 Claude Code MCP 同步（可選）
+
+透過 Claude Code CLI 和 Roam Research MCP，可實現摘要自動同步到 Roam Research：
+
+- 摘要完成後自動儲存 Markdown 到本地 `roam_backup/` 資料夾
+- 若啟用同步，會呼叫 Claude Code 使用 Roam MCP 建立頁面
+- 即使同步失敗，本地備份仍會保留
+
+> 詳細設定請參考 [安裝步驟 - 設定 Claude Code MCP](#安裝步驟)
 
 ---
 
@@ -234,7 +244,67 @@ CLAUDE_CODE_SYNC_ENABLED=false
 </details>
 
 <details>
-<summary><strong>6. 設定 Instagram Cookies</strong></summary>
+<summary><strong>6. 設定 Claude Code MCP 自動同步（可選）</strong></summary>
+
+此功能可將摘要自動同步到 Roam Research，需要先設定 Claude Code 和 Roam MCP。
+
+**前置需求：**
+
+1. 安裝 [Claude Code CLI](https://docs.anthropic.com/en/docs/claude-code)
+2. 設定 Roam Research MCP 伺服器
+
+**設定 Roam MCP：**
+
+在 Claude Code 的 MCP 設定檔中加入 Roam Research MCP：
+
+```json
+{
+  "mcpServers": {
+    "roam-research": {
+      "command": "npx",
+      "args": ["-y", "@anthropic/roam-research-mcp"],
+      "env": {
+        "ROAM_API_TOKEN": "your_roam_api_token",
+        "ROAM_GRAPH_NAME": "your_graph_name"
+      }
+    }
+  }
+}
+```
+
+**啟用同步：**
+
+在 `.env` 中設定：
+
+```env
+CLAUDE_CODE_SYNC_ENABLED=true
+ROAM_GRAPH_NAME=your_graph_name
+```
+
+**運作方式：**
+
+```
+1. 摘要生成完成
+       │
+       ▼
+2. 儲存 Markdown 到 roam_backup/
+       │
+       ▼
+3. 呼叫 Claude Code CLI（非互動模式）
+       │
+       ▼
+4. Claude Code 使用 Roam MCP 建立頁面
+       │
+       ▼
+5. 內容自動出現在 Roam Research
+```
+
+> 💡 **提示**：即使 Claude Code 同步失敗，摘要仍會保存在本地 `roam_backup/` 資料夾中。
+
+</details>
+
+<details>
+<summary><strong>7. 設定 Instagram Cookies</strong></summary>
 
 為了下載 Instagram Reels，需要提供登入後的 cookies：
 
@@ -249,7 +319,7 @@ CLAUDE_CODE_SYNC_ENABLED=false
 </details>
 
 <details>
-<summary><strong>7. 取得 Telegram Chat ID</strong></summary>
+<summary><strong>8. 取得 Telegram Chat ID</strong></summary>
 
 1. 啟動 Bot 後，發送任意訊息給 Bot
 2. 查看伺服器日誌，會顯示您的 Chat ID
