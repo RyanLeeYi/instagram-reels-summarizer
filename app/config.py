@@ -22,11 +22,19 @@ class Settings(BaseSettings):
     # Ollama 本地 LLM 設定
     ollama_host: str = Field(default="http://localhost:11434", env="OLLAMA_HOST")
     ollama_model: str = Field(default="qwen2.5:7b", env="OLLAMA_MODEL")
+    ollama_vision_model: str = Field(default="minicpm-v", env="OLLAMA_VISION_MODEL")
 
     # Roam Research
     roam_graph_name: str = Field(..., env="ROAM_GRAPH_NAME")
 
+    # Webhook 設定
+    webhook_url: str = Field(default="", env="WEBHOOK_URL")
+
+    # Claude Code 同步設定
+    claude_code_sync_enabled: bool = Field(default=False, env="CLAUDE_CODE_SYNC_ENABLED")
+
     # 系統設定
+    retry_enabled: bool = Field(default=True, env="RETRY_ENABLED")
     retry_interval_hours: int = Field(default=1, env="RETRY_INTERVAL_HOURS")
     max_retry_count: int = Field(default=3, env="MAX_RETRY_COUNT")
     temp_video_dir: str = Field(default="./temp_videos", env="TEMP_VIDEO_DIR")

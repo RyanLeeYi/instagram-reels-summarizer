@@ -5,11 +5,13 @@
 ## 功能特色
 
 - 📱 **Telegram Bot 整合**：直接分享 Instagram Reels 連結即可處理
-- 🎬 **自動下載**：使用 yt-dlp 下載 Instagram Reels 影片
+- 🎬 **自動下載**：使用 yt-dlp + cookies.txt 下載 Instagram Reels 影片
 - 🎤 **語音轉錄**：使用 faster-whisper 本地模型（免費、無需 API Key）
-- 📝 **AI 摘要**：使用 Ollama + Qwen2.5 本地模型（免費、無需 API Key）
-- 📚 **Roam Research 同步**：自動建立 Markdown 檔案供匯入
+- 👁️ **視覺分析**：使用 MiniCPM-V 分析影片畫面（動態 8-10 幀、並行處理）
+- 📝 **AI 摘要**：使用 Ollama + Qwen2.5 整合語音與畫面生成繁體中文摘要
+- 📚 **Roam Research 同步**：本地 Markdown + Claude Code MCP 自動同步
 - 🔄 **失敗重試**：自動重試失敗的任務
+- ⚡ **並行處理**：幀分析支援並行加速
 
 ## 💡 完全免費
 
@@ -84,9 +86,13 @@ brew install ollama
 curl -fsSL https://ollama.com/install.sh | sh
 ```
 
-下載 Qwen2.5 模型：
+下載模型：
 ```bash
+# 文字摘要模型
 ollama pull qwen2.5:7b
+
+# 視覺分析模型
+ollama pull minicpm-v
 ```
 
 ### 6. 設定環境變數
@@ -113,12 +119,28 @@ WHISPER_DEVICE=cpu  # cpu 或 cuda (需要 NVIDIA GPU)
 # Ollama 本地 LLM 設定（無需 API Key）
 OLLAMA_HOST=http://localhost:11434
 OLLAMA_MODEL=qwen2.5:7b  # 可選: qwen2.5:3b, qwen2.5:14b
+OLLAMA_VISION_MODEL=minicpm-v  # 視覺分析模型
 
 # Roam Research Graph 名稱
 ROAM_GRAPH_NAME=your_graph_name
+
+# Claude Code 同步（可選，需先設定 Roam MCP）
+CLAUDE_CODE_SYNC_ENABLED=false  # true 啟用自動同步到 Roam
 ```
 
-### 7. 取得 Telegram Chat ID
+### 7. 設定 Instagram Cookies
+
+為了下載 Instagram Reels，需要提供登入後的 cookies：
+
+1. 安裝瀏覽器擴充功能 "Get cookies.txt LOCALLY"（或類似工具）
+2. 在瀏覽器登入 Instagram
+3. 前往 instagram.com
+4. 使用擴充功能匯出 cookies
+5. 儲存為專案根目錄下的 `cookies.txt`
+
+> ⚠️ **安全提醒**：`cookies.txt` 包含你的登入憑證，**絕對不要上傳到 GitHub**。此檔案已在 `.gitignore` 中排除。
+
+### 8. 取得 Telegram Chat ID
 
 1. 啟動 Bot 後，發送任意訊息給 Bot
 2. 查看伺服器日誌，會顯示您的 Chat ID
@@ -177,6 +199,7 @@ curl -X POST "http://localhost:8000/webhook/setup?webhook_url=https://your-tunne
 5. 等待處理完成，Bot 會回覆：
    - 摘要段落
    - 條列式重點
+   - 畫面觀察
    - Roam Research 頁面連結
 
 ## API 端點
@@ -204,7 +227,8 @@ instagram-reels-summarizer/
 │   │   ├── __init__.py
 │   │   ├── downloader.py       # Instagram 下載
 │   │   ├── transcriber.py      # Whisper 轉錄
-│   │   ├── summarizer.py       # Claude 摘要
+│   │   ├── visual_analyzer.py  # MiniCPM-V 視覺分析
+│   │   ├── summarizer.py       # Ollama 摘要
 │   │   └── roam_sync.py        # Roam Research 同步
 │   ├── scheduler/
 │   │   ├── __init__.py
@@ -212,8 +236,24 @@ instagram-reels-summarizer/
 │   └── database/
 │       ├── __init__.py
 │       └── models.py           # SQLite 模型
-├── .env.example
-├── requirements.txt
+├── scripts/                    # 手動測試腳本
+│   ├── README.md
+│   ├── test_download.py        # 下載測試
+│   ├── test_transcribe.py      # 轉錄測試
+│   ├── test_summarize.py       # 摘要測試
+│   ├── test_visual.py          # 視覺分析測試
+│   ├── test_flow.py            # 完整流程測試
+│   └── test_flow_visual.py     # 完整流程測試（含視覺）
+├── tests/                      # pytest 單元測試
+│   ├── __init__.py
+│   ├── test_downloader.py
+│   └── test_summarizer.py
+├── .env.example                # 環境變數範例
+├── .gitignore                  # Git 忽略規則
+├── cookies.txt.example         # Cookies 範例
+├── requirements.txt            # Python 依賴
+├── start.bat                   # Windows 啟動腳本
+├── start.ps1                   # PowerShell 啟動腳本
 └── README.md
 ```
 
@@ -224,9 +264,10 @@ instagram-reels-summarizer/
 **Q: 下載失敗，顯示「無法存取」**
 - Instagram 可能限制了存取，請稍後再試
 - 確認連結是否為公開的 Reels
+- 確認 `cookies.txt` 有效（可能需要重新匯出）
 
 **Q: 轉錄失敗**
-- 確認 OpenAI API Key 有效
+- 確認 faster-whisper 已正確安裝
 - 影片可能沒有語音內容
 
 **Q: Webhook 無法接收訊息**
@@ -258,4 +299,6 @@ pip install --upgrade yt-dlp
 
 ---
 
-*建立時間: 2026-01-20*
+*建立時間: 2026-01-20*  
+*更新時間: 2026-01-21 - 新增視覺分析功能*  
+*更新時間: 2026-01-22 - 新增 Claude Code MCP 同步、並行幀分析、動態幀數*

@@ -1,5 +1,6 @@
 """FastAPI 主程式入口"""
 
+import asyncio
 import logging
 from contextlib import asynccontextmanager
 
@@ -37,13 +38,30 @@ async def lifespan(app: FastAPI):
     # 建立 Telegram Bot Application
     telegram_app = bot_handler.build_application()
     await telegram_app.initialize()
+    
+    # 清除 webhook 中的舊訊息，並重新設定 webhook
+    try:
+        # 先刪除 webhook 並清除所有 pending updates
+        await telegram_app.bot.delete_webhook(drop_pending_updates=True)
+        logger.info("已清除 webhook 舊訊息")
+        
+        # 如果有設定 webhook URL，自動重新設定
+        if settings.webhook_url:
+            webhook_full_url = f"{settings.webhook_url}/webhook/telegram"
+            await telegram_app.bot.set_webhook(url=webhook_full_url)
+            logger.info(f"已設定 webhook: {webhook_full_url}")
+    except Exception as e:
+        logger.warning(f"設定 webhook 失敗: {e}")
 
     # 設定排程器的 Bot
     retry_scheduler.set_bot(telegram_app.bot)
 
-    # 啟動排程器
-    retry_scheduler.start()
-    logger.info("排程器啟動完成")
+    # 啟動排程器（如果啟用）
+    if settings.retry_enabled:
+        retry_scheduler.start()
+        logger.info("排程器啟動完成")
+    else:
+        logger.info("重試排程器已停用 (RETRY_ENABLED=false)")
 
     logger.info("應用程式初始化完成！")
 
@@ -51,7 +69,8 @@ async def lifespan(app: FastAPI):
 
     # 關閉時執行
     logger.info("正在關閉應用程式...")
-    retry_scheduler.stop()
+    if settings.retry_enabled:
+        retry_scheduler.stop()
     await telegram_app.shutdown()
     logger.info("應用程式已關閉")
 
@@ -87,18 +106,29 @@ async def telegram_webhook(request: Request):
     Telegram Webhook 端點
 
     接收來自 Telegram 的更新
+    先立即回應 Telegram（避免超時），再在背景處理訊息
     """
     try:
         update_data = await request.json()
         logger.debug(f"收到 Telegram 更新: {update_data}")
 
-        await bot_handler.process_update(update_data)
+        # 在背景處理訊息，不等待完成就先回應 Telegram
+        asyncio.create_task(process_update_in_background(update_data))
 
         return JSONResponse(content={"ok": True})
 
     except Exception as e:
         logger.error(f"處理 Webhook 失敗: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
+        # 即使處理失敗也返回 200，避免 Telegram 重試導致循環
+        return JSONResponse(content={"ok": True})
+
+
+async def process_update_in_background(update_data: dict):
+    """在背景處理 Telegram 更新"""
+    try:
+        await bot_handler.process_update(update_data)
+    except Exception as e:
+        logger.error(f"背景處理更新失敗: {e}")
 
 
 @app.post("/webhook/setup")

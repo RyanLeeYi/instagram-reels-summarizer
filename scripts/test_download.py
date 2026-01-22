@@ -1,11 +1,14 @@
-"""測試 Instagram 影片下載"""
+"""測試 Instagram 影片下載
 
-import asyncio
+用法: python scripts/test_download.py
+"""
+
 import sys
 from pathlib import Path
 
 # 加入專案路徑
-sys.path.insert(0, str(Path(__file__).parent))
+PROJECT_ROOT = Path(__file__).parent.parent
+sys.path.insert(0, str(PROJECT_ROOT))
 
 import yt_dlp
 
@@ -16,7 +19,7 @@ def test_download():
     url = "https://www.instagram.com/reel/DMxowe6v2zY/?igsh=MW45MnFjNnMwYTNvdA=="
     
     # 建立暫存目錄
-    temp_dir = Path(__file__).parent / "temp_videos"
+    temp_dir = PROJECT_ROOT / "temp_videos"
     temp_dir.mkdir(exist_ok=True)
     
     output_template = str(temp_dir / "test_video")

@@ -1,14 +1,20 @@
-"""測試 Ollama + Qwen2.5 本地摘要"""
+"""測試 Ollama + Qwen2.5 本地摘要
+
+用法: python scripts/test_summarize.py
+"""
 
 import ollama
 from pathlib import Path
+
+# 專案根目錄
+PROJECT_ROOT = Path(__file__).parent.parent
 
 
 def test_ollama_summarize():
     """使用 Ollama + Qwen2.5 測試本地摘要"""
     
     # 讀取逐字稿
-    transcript_path = Path(__file__).parent / "temp_videos" / "transcript.txt"
+    transcript_path = PROJECT_ROOT / "temp_videos" / "transcript.txt"
     
     if not transcript_path.exists():
         print("❌ 逐字稿檔案不存在")
@@ -70,7 +76,7 @@ def test_ollama_summarize():
         print("-" * 50)
         
         # 儲存摘要
-        summary_path = Path(__file__).parent / "temp_videos" / "summary.txt"
+        summary_path = PROJECT_ROOT / "temp_videos" / "summary.txt"
         with open(summary_path, "w", encoding="utf-8") as f:
             f.write(content)
         print(f"💾 摘要已儲存: {summary_path}")

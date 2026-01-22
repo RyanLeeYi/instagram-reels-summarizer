@@ -1,5 +1,6 @@
 """Roam Research 同步服務"""
 
+import asyncio
 import logging
 import re
 from dataclasses import dataclass
@@ -45,13 +46,13 @@ class RoamSyncService:
         Returns:
             頁面標題
         """
-        today = datetime.now().strftime("%Y-%m-%d")
+        now = datetime.now().strftime("%Y-%m-%d %H%M%S")
 
         # 清理標題中的特殊字符
         clean_title = video_title.replace("[", "").replace("]", "")
         clean_title = clean_title[:50] if len(clean_title) > 50 else clean_title
 
-        return f"IG Reels - {today} - {clean_title}"
+        return f"IG Reels - {now} - {clean_title}"
 
     def _format_roam_content(
         self,
@@ -60,9 +61,12 @@ class RoamSyncService:
         summary: str,
         bullet_points: List[str],
         transcript: str,
+        tools_and_skills: Optional[List[str]] = None,
+        visual_observations: Optional[List[str]] = None,
+        visual_analysis: Optional[str] = None,
     ) -> str:
         """
-        格式化 Roam Research 頁面內容
+        格式化 Roam Research 頁面內容（使用標準 Markdown 格式）
 
         Args:
             instagram_url: Instagram 連結
@@ -70,6 +74,9 @@ class RoamSyncService:
             summary: 摘要
             bullet_points: 重點列表
             transcript: 逐字稿
+            tools_and_skills: 可選的工具與技能列表
+            visual_observations: 可選的畫面觀察列表
+            visual_analysis: 可選的完整影像分析內容
 
         Returns:
             格式化後的內容
@@ -77,22 +84,68 @@ class RoamSyncService:
         processed_time = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
 
         # 構建重點列表
-        bullet_text = "\n".join([f"    - {point}" for point in bullet_points])
+        bullet_text = "\n".join([f"- {point}" for point in bullet_points])
 
         content = f"""#Instagram摘要
 
-- **來源資訊**
-    - **原始連結**: [{video_title}]({instagram_url})
-    - **處理時間**: {processed_time}
+## 來源資訊
 
-- **摘要**
-    - {summary}
+- **原始連結**: [{video_title}]({instagram_url})
+- **處理時間**: {processed_time}
 
-- **重點整理**
+## 摘要
+
+{summary}
+
+## 重點整理
+
 {bullet_text}
+"""
 
-- **逐字稿**
-    - > {transcript}
+        # 如果有工具與技能，添加到內容中
+        if tools_and_skills:
+            tools_text = "\n".join([f"- {tool}" for tool in tools_and_skills])
+            content += f"""
+## 工具與技能
+
+{tools_text}
+"""
+
+        # 如果有視覺觀察，添加到內容中
+        if visual_observations:
+            visual_text = "\n".join([f"- {obs}" for obs in visual_observations])
+            content += f"""
+## 畫面觀察
+
+{visual_text}
+"""
+
+        # 如果有完整影像分析，添加到內容中
+        if visual_analysis:
+            content += f"""
+## 影像分析
+
+{visual_analysis}
+"""
+
+        # 處理逐字稿
+        if transcript.startswith("[此影片無語音內容，以下為畫面描述]"):
+            # 分離提示文字和實際內容
+            parts = transcript.split("\n", 1)
+            notice = parts[0].strip("[]")  # 移除方括號
+            actual_content = parts[1] if len(parts) > 1 else ""
+            content += f"""
+## 逐字稿
+
+*{notice}*
+
+{actual_content}
+"""
+        else:
+            content += f"""
+## 逐字稿
+
+> {transcript.replace(chr(10), chr(10) + "> ")}
 """
         return content
 
@@ -103,6 +156,9 @@ class RoamSyncService:
         summary: str,
         bullet_points: List[str],
         transcript: str,
+        tools_and_skills: Optional[List[str]] = None,
+        visual_observations: Optional[List[str]] = None,
+        visual_analysis: Optional[str] = None,
     ) -> RoamSyncResult:
         """
         同步內容到 Roam Research
@@ -115,6 +171,9 @@ class RoamSyncService:
             summary: 摘要
             bullet_points: 重點列表
             transcript: 逐字稿
+            tools_and_skills: 可選的工具與技能列表
+            visual_observations: 可選的視覺觀察列表
+            visual_analysis: 可選的完整影像分析內容
 
         Returns:
             RoamSyncResult: 同步結果
@@ -122,7 +181,8 @@ class RoamSyncService:
         try:
             page_title = self._generate_page_title(video_title)
             content = self._format_roam_content(
-                instagram_url, video_title, summary, bullet_points, transcript
+                instagram_url, video_title, summary, bullet_points, transcript,
+                tools_and_skills, visual_observations, visual_analysis
             )
 
             # 儲存到本地 Markdown 檔案
@@ -135,6 +195,121 @@ class RoamSyncService:
                 success=False,
                 error_message=f"同步失敗: {error_msg}",
             )
+
+    async def save_markdown_note(
+        self,
+        video_title: str,
+        markdown_content: str,
+    ) -> RoamSyncResult:
+        """
+        直接儲存 LLM 生成的 Markdown 筆記
+
+        Args:
+            video_title: 影片標題（用於生成檔名）
+            markdown_content: LLM 生成的完整 Markdown 內容
+
+        Returns:
+            RoamSyncResult: 同步結果
+        """
+        try:
+            page_title = self._generate_page_title(video_title)
+            
+            # 直接使用 LLM 生成的內容，只加上標題
+            return await self._save_to_local(page_title, markdown_content)
+
+        except Exception as e:
+            error_msg = str(e)
+            logger.error(f"儲存筆記失敗: {error_msg}")
+            return RoamSyncResult(
+                success=False,
+                error_message=f"儲存失敗: {error_msg}",
+            )
+
+    async def _sync_via_claude_code(self, file_path: Path, page_title: str) -> bool:
+        """
+        使用 Claude Code CLI 同步 Markdown 到 Roam Research
+
+        透過 claude -p 非互動模式，讓 Claude Code 使用 Roam MCP 工具同步
+
+        Args:
+            file_path: Markdown 檔案路徑
+            page_title: Roam 頁面標題
+
+        Returns:
+            是否同步成功
+        """
+        import shutil
+        import platform
+        
+        try:
+            # 讀取檔案內容
+            with open(file_path, "r", encoding="utf-8") as f:
+                content = f.read()
+
+            # 構建 prompt 讓 Claude Code 使用 Roam MCP 同步
+            prompt = f'''請使用 roam_create_page 工具將以下 Markdown 內容建立為 Roam Research 頁面。
+
+頁面標題: {page_title}
+
+內容:
+{content}'''
+
+            # 找到 claude 可執行檔
+            claude_path = shutil.which("claude")
+            if not claude_path:
+                # Windows 特殊處理：嘗試找 .cmd 或 npm 路徑
+                if platform.system() == "Windows":
+                    npm_path = Path.home() / "AppData" / "Roaming" / "npm"
+                    for ext in [".cmd", ".ps1", ""]:
+                        candidate = npm_path / f"claude{ext}"
+                        if candidate.exists():
+                            claude_path = str(candidate)
+                            break
+            
+            if not claude_path:
+                logger.warning("找不到 claude CLI，跳過 Roam 同步")
+                return False
+
+            # 允許所有 roam-research MCP 工具
+            allowed_tools = "mcp__roam-research__*"
+
+            # 使用 stdin 傳遞 prompt（避免命令列參數長度限制和特殊字符問題）
+            if platform.system() == "Windows":
+                process = await asyncio.create_subprocess_shell(
+                    f'"{claude_path}" -p --allowedTools "{allowed_tools}"',
+                    stdin=asyncio.subprocess.PIPE,
+                    stdout=asyncio.subprocess.PIPE,
+                    stderr=asyncio.subprocess.PIPE,
+                    cwd=str(file_path.parent.parent),
+                )
+            else:
+                process = await asyncio.create_subprocess_exec(
+                    claude_path,
+                    "-p",
+                    "--allowedTools", allowed_tools,
+                    stdin=asyncio.subprocess.PIPE,
+                    stdout=asyncio.subprocess.PIPE,
+                    stderr=asyncio.subprocess.PIPE,
+                    cwd=str(file_path.parent.parent),
+                )
+
+            # 透過 stdin 傳遞 prompt
+            stdout, stderr = await process.communicate(input=prompt.encode('utf-8'))
+
+            if process.returncode == 0:
+                logger.info(f"Claude Code 同步成功: {page_title}")
+                logger.debug(f"Claude 輸出: {stdout.decode('utf-8', errors='ignore')}")
+                return True
+            else:
+                logger.warning(f"Claude Code 同步失敗 (exit {process.returncode}): {stderr.decode('utf-8', errors='ignore')}")
+                return False
+
+        except FileNotFoundError:
+            logger.warning("claude CLI 未安裝或不在 PATH 中，跳過 Roam 同步")
+            return False
+        except Exception as e:
+            logger.error(f"Claude Code 同步發生錯誤: {e}")
+            return False
 
     async def _save_to_local(self, page_title: str, content: str) -> RoamSyncResult:
         """
@@ -165,6 +340,15 @@ class RoamSyncService:
                 f.write(content)
 
             logger.info(f"內容已儲存到本地: {file_path}")
+
+            # 如果啟用 Claude Code 同步，嘗試同步到 Roam
+            if settings.claude_code_sync_enabled:
+                logger.info("正在透過 Claude Code 同步到 Roam Research...")
+                sync_success = await self._sync_via_claude_code(file_path, page_title)
+                if sync_success:
+                    logger.info(f"已透過 Claude Code 同步到 Roam: {page_title}")
+                else:
+                    logger.warning("Claude Code 同步失敗，內容已保留在本地")
 
             # 生成 Roam URL（供使用者參考）
             encoded_title = quote(page_title)

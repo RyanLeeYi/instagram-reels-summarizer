@@ -1,0 +1,73 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+*.egg-info/
+.installed.cfg
+*.egg
+
+# Virtual Environment
+.venv/
+venv/
+ENV/
+env/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# GitHub Copilot Instructions (local only)
+.github/
+
+# Environment Variables - NEVER COMMIT
+.env
+.env.local
+.env.*.local
+
+# Sensitive Files - NEVER COMMIT
+cookies.txt
+*.cookie
+*.cookies
+
+# Database
+*.db
+*.sqlite
+*.sqlite3
+
+# Temp Files
+temp_videos/*.mp4
+temp_videos/*.mp3
+temp_videos/frames_*/
+temp_videos/test_*
+
+# Roam Backup (contains processed content)
+roam_backup/
+
+# Logs
+*.log
+logs/
+
+# OS Files
+.DS_Store
+Thumbs.db
+
+# Test outputs
+.pytest_cache/
+.coverage
+htmlcov/

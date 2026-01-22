@@ -1,14 +1,20 @@
-"""測試 faster-whisper 本地語音轉錄"""
+"""測試 faster-whisper 本地語音轉錄
+
+用法: python scripts/test_transcribe.py
+"""
 
 from pathlib import Path
 from faster_whisper import WhisperModel
+
+# 專案根目錄
+PROJECT_ROOT = Path(__file__).parent.parent
 
 
 def test_local_transcribe():
     """使用 faster-whisper 本地轉錄"""
     
     # 音訊檔案路徑
-    audio_path = Path(__file__).parent / "temp_videos" / "test_video.mp3"
+    audio_path = PROJECT_ROOT / "temp_videos" / "test_video.mp3"
     
     if not audio_path.exists():
         print(f"❌ 音訊檔案不存在: {audio_path}")
@@ -57,7 +63,7 @@ def test_local_transcribe():
     print(f"📊 字數統計: {len(full_transcript)} 字")
     
     # 儲存逐字稿
-    output_path = Path(__file__).parent / "temp_videos" / "transcript.txt"
+    output_path = PROJECT_ROOT / "temp_videos" / "transcript.txt"
     with open(output_path, "w", encoding="utf-8") as f:
         f.write(full_transcript)
     print(f"💾 逐字稿已儲存: {output_path}")

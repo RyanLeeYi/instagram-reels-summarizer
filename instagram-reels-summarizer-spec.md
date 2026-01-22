@@ -16,9 +16,11 @@
 | Telegram Bot 接收連結 | 接收使用者分享的 Instagram Reels 連結 | 高 |
 | Instagram 影片下載 | 解析連結並下載 Reels 短影片 | 高 |
 | 語音轉逐字稿 | 使用 faster-whisper 本地模型將影片音訊轉為文字 | 高 |
-| AI 摘要生成 | 使用 Ollama + Qwen2.5 本地模型生成摘要與條列重點 | 高 |
-| Telegram 回覆 | 回傳摘要、重點與 Roam 頁面連結 | 高 |
-| Roam Research 同步 | 儲存為本地 Markdown 檔案供匯入 Roam Research | 高 |
+| AI 摘要生成 | 使用 Ollama + Qwen2.5 本地模型生成摘要與條列重點（繁體中文） | 高 |
+| 視覺分析 | 使用 MiniCPM-V 分析影片畫面內容（動態 8-10 幀、並行處理） | 中 |
+| 工具與技能提取 | 從摘要中提取工具、技能、步驟等清單（必填欄位） | 中 |
+| Telegram 回覆 | 回傳摘要、重點、畫面觀察與 Roam 頁面連結 | 高 |
+| Roam Research 同步 | 儲存本地 Markdown + Claude Code MCP 自動同步 | 高 |
 | 失敗重試機制 | 記錄失敗連結並自動定時重試 | 中 |
 
 ### 2.2 使用流程
@@ -43,9 +45,15 @@
 └─────────────────────────────────────────────────────────────────────┘
 
 ┌──────────┐    ┌──────────┐    ┌──────────────┐    ┌──────────────┐
-│ Telegram │───▶│ 下載影片  │───▶│ faster-whisper │───▶│ Ollama/Qwen  │
-│   Bot    │    │          │    │ 本地轉錄       │    │ 本地摘要     │
+│ Telegram │───▶│ 下載影片  │───▶│ faster-whisper │───▶│ MiniCPM-V    │
+│   Bot    │    │ (mp4+mp3) │    │ 本地轉錄       │    │ 視覺分析     │
 └──────────┘    └──────────┘    └──────────────┘    └──────────────┘
+                                                      │
+                                                      ▼
+                                               ┌──────────────┐
+                                               │ Ollama/Qwen  │
+                                               │ 整合摘要     │
+                                               └──────────────┘
                                                       │
                      ┌────────────────────────────────┤
                      ▼                                ▼
@@ -62,7 +70,7 @@
 | Instagram 連結無效 | 回傳錯誤訊息：「無法解析此連結，請確認是否為有效的 Instagram Reels 連結」 |
 | 影片下載失敗 | 記錄連結至失敗清單，回傳「下載失敗，已排入重試佇列」 |
 | 語音轉錄失敗 | 記錄連結至失敗清單，回傳「轉錄失敗，已排入重試佇列」 |
-| 影片無語音/靜音 | 回傳「此影片無可辨識的語音內容」 |
+| 影片無語音/靜音 | 自動改用視覺分析結果作為主要內容來源 |
 | Ollama 摘要失敗 | 記錄連結至失敗清單，回傳「摘要生成失敗，已排入重試佇列」 |
 | Roam Research 同步失敗 | 先回傳 Telegram 摘要，記錄同步失敗待重試 |
 | 重試 3 次仍失敗 | 回傳「處理失敗已達重試上限，請手動重新分享」 |
@@ -76,9 +84,10 @@
 | 程式語言 | Python 3.10+ |
 | Web 框架 | FastAPI |
 | Telegram Bot | python-telegram-bot 套件 |
-| Instagram 下載 | yt-dlp |
+| Instagram 下載 | yt-dlp + cookies.txt 認證 |
 | 語音轉錄 | faster-whisper 本地模型 |
 | 摘要生成 | Ollama + Qwen2.5 本地模型 |
+| 視覺分析 | Ollama + MiniCPM-V 本地模型 |
 | Roam 整合 | 本地 Markdown 檔案儲存 |
 | 任務排程 | APScheduler |
 | 部署方式 | 本地端 + Cloudflare Tunnel |
@@ -95,11 +104,12 @@
 │  │  Bot API    │───▶│  (yt-dlp)   │───▶│ 本地轉錄      │        │
 │  └─────────────┘    └─────────────┘    └─────────────┘        │
 │         │                                      │               │
-│         │                                      ▼               │
-│         │                              ┌─────────────┐        │
-│         │                              │ Ollama +    │        │
-│         │                              │ Qwen2.5     │        │
-│         │                              └─────────────┘        │
+│         │                              ┌───────┴───────┐       │
+│         │                              ▼               ▼       │
+│         │                      ┌─────────────┐ ┌─────────────┐│
+│         │                      │ MiniCPM-V   │ │ Ollama +    ││
+│         │                      │ 視覺分析    │─▶│ Qwen2.5     ││
+│         │                      └─────────────┘ └─────────────┘│
 │         │                                      │               │
 │         ▼                                      ▼               │
 │  ┌─────────────┐                       ┌─────────────┐        │
@@ -150,32 +160,67 @@
     "重點二",
     "重點三"
   ],
+  "tools_and_skills": [
+    "工具/技能一",
+    "工具/技能二"
+  ],
+  "visual_observations": [
+    "畫面觀察一",
+    "畫面觀察二"
+  ],
+  "visual_analysis": "完整影像分析內容（各時間點的畫面描述）...",
   "language_detected": "zh-TW",
   "processed_at": "2026-01-20T10:30:00+08:00"
 }
 ```
 
-### 3.4 Roam Research 頁面格式
+### 3.4 Roam Research 頁面格式（標準 Markdown）
 
 ```markdown
-[[IG Reels - 2026-01-20 - 影片標題]]
+# IG Reels - 2026-01-20 - 影片標題
 
 #Instagram摘要
 
 ## 來源資訊
+
 - **原始連結**: [Instagram Reels](https://www.instagram.com/reel/xxx)
 - **處理時間**: 2026-01-20 10:30:00
 
 ## 摘要
+
 這是一段話的影片摘要內容，概述影片的主要主題和核心觀點...
 
 ## 重點整理
+
 - 重點一
 - 重點二
 - 重點三
 
+## 工具與技能
+
+- 工具/技能一
+- 工具/技能二
+
+## 畫面觀察
+
+- 畫面觀察一
+- 畫面觀察二
+
+## 影像分析
+
+[0秒] 畫面描述...
+[2秒] 畫面描述...
+
 ## 逐字稿
-> 完整的語音轉文字內容...
+
+> 完整的語音轉文字內容（有語音時使用引用區塊）
+
+*或無語音時：*
+
+*此影片無語音內容，以下為畫面描述*
+
+[0秒] 畫面描述...
+[2秒] 畫面描述...
 ```
 
 ### 3.5 Telegram Bot 回覆格式
@@ -191,7 +236,11 @@
 • 重點二
 • 重點三
 
-📎 Roam Research
+� 畫面觀察
+• 畫面觀察一
+• 畫面觀察二
+
+�📎 Roam Research
 https://roamresearch.com/#/app/your-graph/page/xxx
 
 🔗 原始連結
@@ -200,12 +249,24 @@ https://www.instagram.com/reel/xxx
 
 ### 3.6 服務整合需求
 
-| 服務 | 用途 | 需要的懑證 |
+| 服務 | 用途 | 需要的認證 |
 |------|------|-----------|
 | Telegram Bot API | 接收訊息與回覆 | Bot Token |
+| Instagram | 下載 Reels 影片 | cookies.txt（從瀏覽器匯出） |
 | faster-whisper | 本地語音轉錄 | 無（本地模型） |
 | Ollama + Qwen2.5 | 本地摘要生成 | 無（本地模型） |
+| Ollama + MiniCPM-V | 本地視覺分析 | 無（本地模型） |
 | Roam Research | 本地 Markdown 儲存 | 無 |
+
+#### Instagram 認證設定
+
+由於 Instagram 需要登入才能下載影片，需要從瀏覽器匯出 cookies：
+
+1. 在瀏覽器（Chrome/Edge）登入 Instagram
+2. 安裝「Get cookies.txt LOCALLY」擴充套件
+3. 前往 instagram.com，點擊擴充套件匯出 cookies
+4. 將檔案儲存為專案根目錄的 `cookies.txt`
+5. 確認檔案包含 `sessionid` cookie
 
 ### 3.7 環境變數設定
 
@@ -221,11 +282,19 @@ WHISPER_DEVICE=cpu       # cpu 或 cuda
 # Ollama 本地 LLM 設定
 OLLAMA_HOST=http://localhost:11434
 OLLAMA_MODEL=qwen2.5:7b  # 可選: qwen2.5:3b, qwen2.5:14b
+OLLAMA_VISION_MODEL=minicpm-v  # 視覺分析模型
 
 # Roam Research
 ROAM_GRAPH_NAME=your_graph_name
 
+# Webhook 設定 (Cloudflare Tunnel URL，不含 /webhook/telegram)
+WEBHOOK_URL=https://your-tunnel-url.trycloudflare.com
+
+# Claude Code 同步設定 (自動同步 Markdown 到 Roam Research)
+CLAUDE_CODE_SYNC_ENABLED=false  # true 啟用 / false 停用
+
 # 系統設定
+RETRY_ENABLED=true           # 是否啟用失敗重試功能
 RETRY_INTERVAL_HOURS=1
 MAX_RETRY_COUNT=3
 TEMP_VIDEO_DIR=./temp_videos
@@ -264,20 +333,21 @@ TEMP_VIDEO_DIR=./temp_videos
 - [x] 能成功接收 Telegram 傳來的 Instagram Reels 連結
 - [x] 能正確下載 Instagram Reels 影片
 - [x] 能透過 faster-whisper 本地模型將影片語音轉為文字（支援中英文）
-- [ ] 能透過 Ollama + Qwen2.5 本地模型生成中文摘要與條列重點
-- [ ] Telegram Bot 正確回覆摘要、重點與 Roam 連結
-- [ ] 成功儲存 Markdown 檔案供匯入 Roam Research
-- [ ] 頁面正確標記 `#Instagram摘要` hashtag
-- [ ] 失敗時正確記錄並顯示提示訊息
-- [ ] 每小時自動重試失敗的任務
-- [ ] 重試 3 次後正確標記為放棄並通知使用者
-- [ ] 處理完成後正確刪除暫存影片檔案
+- [x] 能透過 MiniCPM-V 本地模型分析影片畫面內容
+- [x] 能透過 Ollama + Qwen2.5 本地模型生成中文摘要與條列重點
+- [x] Telegram Bot 正確回覆摘要、重點、畫面觀察與 Roam 連結
+- [x] 成功儲存 Markdown 檔案供匯入 Roam Research
+- [x] 頁面正確標記 `#Instagram摘要` hashtag
+- [x] 失敗時正確記錄並顯示提示訊息
+- [x] 每小時自動重試失敗的任務
+- [x] 重試 3 次後正確標記為放棄並通知使用者
+- [x] 處理完成後正確刪除暫存影片檔案
 
 ### 5.2 整合驗收
 
-- [ ] Cloudflare Tunnel 正確暴露本地服務
-- [ ] 手機 Instagram 分享至 Telegram Bot 流程順暢
-- [ ] 端對端流程可在 2 分鐘內完成
+- [x] Cloudflare Tunnel 正確暴露本地服務
+- [x] 手機 Instagram 分享至 Telegram Bot 流程順暢
+- [x] 端對端流程可在 2 分鐘內完成
 
 ## 6. 建議的專案結構
 
@@ -295,6 +365,7 @@ instagram-reels-summarizer/
 │   │   ├── downloader.py       # Instagram 下載 (yt-dlp)
 │   │   ├── transcriber.py      # 本地 Whisper 轉錄 (faster-whisper)
 │   │   ├── summarizer.py       # 本地 LLM 摘要 (Ollama + Qwen2.5)
+│   │   ├── visual_analyzer.py  # 視覺分析 (Ollama + MiniCPM-V)
 │   │   └── roam_sync.py        # Markdown 儲存
 │   ├── scheduler/
 │   │   ├── __init__.py
@@ -341,4 +412,18 @@ instagram-reels-summarizer/
 
 *本文件由需求分析師產出，可直接供 AI 進行開發*  
 *產出時間: 2026-01-20*  
-*更新: 改用本地 AI 模型 (faster-whisper + Ollama)*
+*更新: 2026-01-21 新增視覺分析功能 (MiniCPM-V)*  
+*更新: 2026-01-21 新增工具與技能提取、影像分析區塊、重試開關設定*  
+*更新: 2026-01-21 無語音影片自動使用視覺分析*  
+*更新: 2026-01-21 改用本地 AI 模型 (faster-whisper + Ollama)*  
+*更新: 2026-01-21 Instagram 認證改用 cookies.txt 檔案*  
+*更新: 2026-01-21 Webhook 自動設定與啟動時清空舊訊息*  
+*更新: 2026-01-21 筆記格式改用標準 Markdown（## 標題）*  
+*更新: 2026-01-21 背景處理訊息避免 Telegram Webhook 超時*  
+*更新: 2026-01-21 訊息 ID 去重防止重複處理*
+*更新: 2026-01-21 LLM 直接生成 Markdown 筆記（智能格式適應內容）*
+*更新: 2026-01-21 強化繁體中文輸出要求*
+*更新: 2026-01-21 工具與技能改為必填欄位*
+*更新: 2026-01-21 動態幀數（8-10 幀）根據影片長度調整*
+*更新: 2026-01-21 幀分析並行處理（預設 2 並行）*
+*更新: 2026-01-21 Claude Code MCP 自動同步到 Roam Research*
