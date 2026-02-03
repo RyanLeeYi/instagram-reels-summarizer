@@ -36,8 +36,8 @@
 | 📱 **Telegram Bot 整合** | 直接分享 Instagram Reels 連結即可處理 | python-telegram-bot |
 | 🎬 **自動下載** | 下載 Instagram Reels 影片 | yt-dlp + cookies.txt |
 | 🎤 **語音轉錄** | 本地語音轉文字（免費、無需 API Key） | faster-whisper |
-| 👁️ **視覺分析** | 分析影片畫面（動態 8-10 幀、並行處理） | MiniCPM-V / Gemma3 |
-| 📝 **AI 摘要** | 整合語音與畫面生成繁體中文摘要 | Ollama + Qwen |
+| 👁️ **視覺分析** | 分析影片畫面（動態 8-10 幀、並行處理） | Gemma3 / MiniCPM-V |
+| 📝 **AI 摘要** | 整合語音與畫面生成繁體中文摘要 | Ollama + Qwen3 |
 | 📚 **Roam Research 同步** | 本地備份 + 可選自動同步至 Roam | Claude Code + Roam MCP |
 | 🔄 **失敗重試** | 自動重試失敗的任務（最多 3 次） | APScheduler |
 | ⚡ **並行處理** | 幀分析支援並行加速 | asyncio |
@@ -47,8 +47,8 @@
 本專案使用本地 AI 模型，**不需要任何 API Key**：
 
 - **語音轉錄**：faster-whisper（本地運行）
-- **視覺分析**：MiniCPM-V / Gemma3（透過 Ollama 本地運行）
-- **摘要生成**：Ollama + Qwen（本地運行）
+- **視覺分析**：Gemma3 / MiniCPM-V（透過 Ollama 本地運行）
+- **摘要生成**：Ollama + Qwen3（本地運行）
 
 ### 🔗 Claude Code MCP 同步（可選）
 
@@ -71,8 +71,8 @@
 | **Telegram Bot** | python-telegram-bot | 20.7+ |
 | **影片下載** | yt-dlp | 2024.12+ |
 | **語音轉錄** | faster-whisper | 1.0+ |
-| **摘要生成** | Ollama + Qwen | Latest |
-| **視覺分析** | Ollama + MiniCPM-V / Gemma3 | Latest |
+| **摘要生成** | Ollama + Qwen3 | Latest |
+| **視覺分析** | Ollama + Gemma3 / MiniCPM-V | Latest |
 | **資料庫** | SQLite + SQLAlchemy | 2.0+ |
 | **非同步資料庫** | aiosqlite | 0.19+ |
 | **任務排程** | APScheduler | 3.10+ |
@@ -97,8 +97,8 @@
 │        │                         ┌───────┴───────┐               │
 │        │                         ▼               ▼               │
 │        │                 ┌─────────────┐ ┌─────────────┐        │
-│        │                 │  MiniCPM-V  │ │ Ollama +    │        │
-│        │                 │  視覺分析   │─▶│ Qwen2.5     │        │
+│        │                 │   Gemma3    │ │ Ollama +    │        │
+│        │                 │  視覺分析   │─▶│ Qwen3       │        │
 │        │                 └─────────────┘ └─────────────┘        │
 │        │                                        │                │
 │        ▼                                        ▼                │
@@ -220,11 +220,15 @@ sudo apt update && sudo apt install ffmpeg
 
 **下載模型：**
 ```bash
-# 文字摘要模型
-ollama pull qwen2.5:7b
+# 文字摘要模型（預設）
+ollama pull qwen3:8b
 
-# 視覺分析模型
-ollama pull minicpm-v
+# 視覺分析模型（預設）
+ollama pull gemma3:4b
+
+# 可選替代模型
+# ollama pull qwen2.5:7b
+# ollama pull minicpm-v
 ```
 
 </details>
@@ -253,8 +257,8 @@ WHISPER_DEVICE=cpu         # cpu 或 cuda (需要 NVIDIA GPU)
 
 # Ollama 本地 LLM 設定
 OLLAMA_HOST=http://localhost:11434
-OLLAMA_MODEL=qwen2.5:7b    # 可選: qwen2.5:3b, qwen2.5:14b
-OLLAMA_VISION_MODEL=minicpm-v
+OLLAMA_MODEL=qwen3:8b      # 可選: qwen2.5:7b, qwen2.5:14b
+OLLAMA_VISION_MODEL=gemma3:4b  # 可選: minicpm-v
 
 # Roam Research Graph 名稱
 ROAM_GRAPH_NAME=your_graph_name
@@ -763,6 +767,7 @@ python scripts/test_flow_visual.py   # 完整流程測試
 
 | 日期 | 版本 | 更新內容 |
 |------|------|---------|
+| 2026-02-03 | v1.3.0 | 更新預設模型為 Qwen3:8b 和 Gemma3:4b |
 | 2026-01-22 | v1.2.0 | 新增 Claude Code MCP 同步、並行幀分析、動態幀數 |
 | 2026-01-21 | v1.1.0 | 新增 MiniCPM-V 視覺分析功能 |
 | 2026-01-20 | v1.0.0 | 初始版本發布 |
