@@ -8,12 +8,20 @@ python-telegram-bot>=20.7
 # Instagram Download
 yt-dlp>=2024.12.6
 browser-cookie3>=0.19.1
+instaloader>=4.10
 
 # Local Whisper (faster-whisper)
 faster-whisper>=1.0.0
 
 # Ollama Local LLM
 ollama>=0.4.0
+
+# MiniCPM-V Transformers 模式 (可選)
+# 如需使用 Transformers 模式，請取消以下註解
+# transformers>=4.44.2
+# torch>=2.0.0
+# decord>=0.6.0
+# scipy>=1.10.0
 
 # Database
 sqlalchemy>=2.0.30

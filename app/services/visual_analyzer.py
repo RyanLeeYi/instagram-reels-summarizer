@@ -3,6 +3,7 @@
 import asyncio
 import base64
 import logging
+import re
 import subprocess
 from dataclasses import dataclass
 from pathlib import Path
@@ -14,6 +15,43 @@ from app.config import settings
 
 
 logger = logging.getLogger(__name__)
+
+
+def strip_thinking_tags(content: str) -> str:
+    """
+    移除 MiniCPM-V 4.5 / Qwen3 等模型的 thinking 標籤內容
+    
+    支援的標籤格式：
+    - <think>...</think> (完整標籤)
+    - <thinking>...</thinking> (完整標籤)
+    - <think>... (不完整標籤，被截斷的情況)
+    - <thinking>... (不完整標籤，被截斷的情況)
+    
+    Args:
+        content: 包含 thinking 標籤的原始內容
+        
+    Returns:
+        移除 thinking 標籤後的內容
+    """
+    if not content:
+        return content
+    
+    # 移除完整的 <think>...</think> 標籤（包含多行內容）
+    content = re.sub(r'<think>.*?</think>', '', content, flags=re.DOTALL)
+    
+    # 移除完整的 <thinking>...</thinking> 標籤（包含多行內容）
+    content = re.sub(r'<thinking>.*?</thinking>', '', content, flags=re.DOTALL)
+    
+    # 移除不完整的 <think> 標籤（沒有結束標籤的情況，被截斷）
+    content = re.sub(r'<think>.*$', '', content, flags=re.DOTALL)
+    
+    # 移除不完整的 <thinking> 標籤（沒有結束標籤的情況，被截斷）
+    content = re.sub(r'<thinking>.*$', '', content, flags=re.DOTALL)
+    
+    # 清理多餘的空白行
+    content = re.sub(r'\n{3,}', '\n\n', content)
+    
+    return content.strip()
 
 
 @dataclass
@@ -166,11 +204,13 @@ class VideoVisualAnalyzer:
                 ],
                 options={
                     "temperature": 0.3,
-                    "num_predict": 500,
+                    "num_predict": 1500,  # 需要足夠空間給 thinking + 詳細描述
                 }
             )
             
             description = response["message"]["content"].strip()
+            # 移除 thinking 標籤內容
+            description = strip_thinking_tags(description)
             
             return FrameDescription(
                 timestamp=timestamp,
@@ -199,6 +239,275 @@ class VideoVisualAnalyzer:
                 frames[0].parent.rmdir()
             except Exception:
                 pass
+
+    # 圖片類型分類 Prompt
+    IMAGE_TYPE_DETECTION_PROMPT = """請判斷這張圖片的主要內容類型，只需回答以下其中一個選項：
+1. 表格 - 包含行列結構的資料表格
+2. 清單 - 條列式的項目清單
+3. 流程圖 - 流程、步驟或架構圖
+4. 資訊圖 - 包含多種視覺元素的資訊圖表
+5. 純文字 - 主要是文字說明
+6. 其他 - 無法歸類
+
+請只回答選項名稱，例如：表格"""
+
+    # 根據圖片類型的專門分析 Prompts
+    IMAGE_TYPE_PROMPTS = {
+        "表格": """請用繁體中文完整擷取這張表格的所有內容。
+
+請按照以下格式呈現：
+1. 先列出表格的欄位標題
+2. 然後逐行列出每一列的資料
+3. 如果有合併儲存格或特殊格式，請說明
+
+請確保不遺漏任何一個儲存格的內容。""",
+
+        "清單": """請用繁體中文完整列出這張圖片中的所有項目。
+
+特別注意：
+1. 按照圖片中的順序列出每一個項目
+2. 如果有子項目或巢狀結構，請保持層級關係
+3. 如果項目有編號，請保留編號
+4. 擷取每個項目的完整說明文字
+
+請確保列出所有項目，不要遺漏。""",
+
+        "流程圖": """請用繁體中文描述這張流程圖或架構圖的內容。
+
+請說明：
+1. 流程的起點和終點
+2. 每個步驟或節點的名稱和說明
+3. 步驟之間的連接關係和順序
+4. 如果有分支或條件判斷，請說明
+
+請按照流程順序描述。""",
+
+        "資訊圖": """請用繁體中文詳細描述這張資訊圖的所有內容。
+
+請擷取：
+1. 主標題和副標題
+2. 所有的文字說明
+3. 數據、統計、百分比等數字資訊
+4. 不同區塊的主題和內容
+5. 任何工具、技術、品牌名稱
+
+請盡可能完整擷取所有資訊。""",
+
+        "純文字": """請用繁體中文完整擷取這張圖片中的所有文字。
+
+請注意：
+1. 保持文字的原始段落結構
+2. 如果有標題，請標示出來
+3. 如果有重點標記（粗體、底線等），請說明
+4. 擷取所有可見的文字內容""",
+
+        "其他": """請用繁體中文描述這張圖片的主要內容。
+
+特別注意：
+1. 如果圖片中有列表、表格、清單，請完整列出所有項目
+2. 如果有提到工具、技能、軟體名稱，請逐一列出
+3. 如果有步驟或流程，請按順序說明
+4. 如果有數字、統計資料，請精確記錄
+
+請盡可能詳細擷取圖片中的所有文字資訊。"""
+    }
+
+    # 補充分析：專注於工具與技術（只擷取圖片中明確出現的）
+    TOOLS_EXTRACTION_PROMPT = """【重要】請「只」列出這張圖片中「實際可見」的工具、技術或專業術語。
+
+規則：
+- 必須是圖片文字中「明確出現」的詞彙
+- 不要推測、不要聯想、不要補充任何圖片中沒有的內容
+- 如果圖片中完全沒有出現任何工具或技術名詞，請直接回答「無」
+
+請用繁體中文，以條列方式列出圖片中出現的：
+1. 軟體工具名稱
+2. 技術名詞或縮寫
+3. 平台或服務名稱
+4. 方法論或框架名稱
+
+只列出圖片中確實看得到的項目。"""
+
+    def _detect_image_type(self, image_path: Path) -> str:
+        """偵測圖片類型"""
+        try:
+            response = ollama.chat(
+                model=self.vision_model,
+                messages=[
+                    {
+                        "role": "user",
+                        "content": self.IMAGE_TYPE_DETECTION_PROMPT,
+                        "images": [str(image_path)]
+                    }
+                ],
+                options={
+                    "temperature": 0.1,
+                    "num_predict": 200,  # 需要足夠空間給 thinking + 答案
+                }
+            )
+            
+            result = response["message"]["content"].strip()
+            # 移除 thinking 標籤內容
+            result = strip_thinking_tags(result)
+            
+            # 解析回應，找出類型
+            for type_name in self.IMAGE_TYPE_PROMPTS.keys():
+                if type_name in result:
+                    logger.info(f"偵測到圖片類型: {type_name}")
+                    return type_name
+            
+            logger.info(f"無法識別圖片類型，使用預設: 其他 (回應: {result})")
+            return "其他"
+            
+        except Exception as e:
+            logger.warning(f"圖片類型偵測失敗: {e}，使用預設類型")
+            return "其他"
+
+    def _analyze_image_sync(self, image_path: Path, image_index: int, total_images: int) -> FrameDescription:
+        """
+        同步分析單張圖片（用於貼文圖片分析）
+        先偵測圖片類型，再使用對應的專門 prompt 分析
+        
+        Args:
+            image_path: 圖片路徑
+            image_index: 圖片索引（從 0 開始）
+            total_images: 總圖片數
+            
+        Returns:
+            FrameDescription: 圖片描述
+        """
+        try:
+            # 第一步：偵測圖片類型
+            image_type = self._detect_image_type(image_path)
+            
+            # 第二步：使用對應類型的 prompt 進行分析
+            type_prompt = self.IMAGE_TYPE_PROMPTS.get(image_type, self.IMAGE_TYPE_PROMPTS["其他"])
+            
+            response = ollama.chat(
+                model=self.vision_model,
+                messages=[
+                    {
+                        "role": "user",
+                        "content": type_prompt,
+                        "images": [str(image_path)]
+                    }
+                ],
+                options={
+                    "temperature": 0.3,
+                    "num_predict": 2000,  # 需要足夠空間給 thinking + 詳細分析
+                }
+            )
+            
+            main_description = response["message"]["content"].strip()
+            # 移除 thinking 標籤內容
+            main_description = strip_thinking_tags(main_description)
+            
+            # 第三步：補充分析 - 擷取工具與技術
+            tools_response = ollama.chat(
+                model=self.vision_model,
+                messages=[
+                    {
+                        "role": "user",
+                        "content": self.TOOLS_EXTRACTION_PROMPT,
+                        "images": [str(image_path)]
+                    }
+                ],
+                options={
+                    "temperature": 0.3,
+                    "num_predict": 1000,  # 需要足夠空間給 thinking + 工具列表
+                }
+            )
+            
+            tools_description = tools_response["message"]["content"].strip()
+            # 移除 thinking 標籤內容
+            tools_description = strip_thinking_tags(tools_description)
+            
+            # 組合結果（工具與技術作為獨立區塊）
+            combined = f"【圖片類型：{image_type}】\n\n{main_description}"
+            
+            # 工具與技術作為獨立區塊
+            if tools_description and tools_description.strip() and "無" not in tools_description[:10]:
+                combined += f"\n\n---\n\n【補充：工具與技術擷取】\n{tools_description}"
+            
+            logger.info(f"圖片 {image_index + 1}/{total_images} 分析完成 (類型: {image_type})")
+            
+            return FrameDescription(
+                timestamp=float(image_index),
+                description=combined
+            )
+            
+        except Exception as e:
+            logger.error(f"分析圖片 {image_index + 1}/{total_images} 失敗: {e}")
+            return FrameDescription(
+                timestamp=float(image_index),
+                description="[無法分析]"
+            )
+
+    async def analyze_images(self, image_paths: List[Path]) -> VisualAnalysisResult:
+        """
+        分析多張靜態圖片（用於 Instagram 貼文）
+        
+        每張圖片獨立分析，並以【圖片 1/N】格式組合描述
+        
+        Args:
+            image_paths: 圖片檔案路徑列表
+            
+        Returns:
+            VisualAnalysisResult: 視覺分析結果
+        """
+        if not image_paths:
+            return VisualAnalysisResult(
+                success=False,
+                error_message="沒有提供圖片"
+            )
+        
+        try:
+            total_images = len(image_paths)
+            logger.info(f"正在分析 {total_images} 張貼文圖片（並行度: {self.PARALLEL_ANALYSIS}）...")
+            
+            loop = asyncio.get_event_loop()
+            
+            # 使用 Semaphore 控制並行數量
+            semaphore = asyncio.Semaphore(self.PARALLEL_ANALYSIS)
+            
+            async def analyze_with_limit(idx: int, image_path: Path):
+                async with semaphore:
+                    desc = await loop.run_in_executor(
+                        None, self._analyze_image_sync, image_path, idx, total_images
+                    )
+                    logger.info(f"  圖片 {idx + 1}/{total_images}: {desc.description[:50]}...")
+                    return (idx, desc)
+            
+            # 並行分析所有圖片
+            tasks = [analyze_with_limit(i, path) for i, path in enumerate(image_paths)]
+            results = await asyncio.gather(*tasks)
+            
+            # 按原始順序排列結果
+            frame_descriptions = [desc for _, desc in sorted(results, key=lambda x: x[0])]
+            
+            # 以【圖片 1/N】格式組合整體描述
+            visual_texts = []
+            for i, fd in enumerate(frame_descriptions, 1):
+                visual_texts.append(f"【圖片 {i}/{total_images}】\n{fd.description}")
+            
+            overall_summary = "\n\n".join(visual_texts)
+            
+            logger.info(f"貼文圖片分析完成，共 {total_images} 張")
+            
+            return VisualAnalysisResult(
+                success=True,
+                frame_descriptions=frame_descriptions,
+                overall_visual_summary=overall_summary
+            )
+            
+        except Exception as e:
+            error_msg = str(e)
+            logger.error(f"圖片分析失敗: {error_msg}")
+            
+            return VisualAnalysisResult(
+                success=False,
+                error_message=f"圖片分析失敗: {error_msg}"
+            )
 
     async def analyze(self, video_path: Path) -> VisualAnalysisResult:
         """

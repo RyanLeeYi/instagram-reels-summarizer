@@ -31,6 +31,8 @@ env/
 .idea/
 *.swp
 *.swo
+*.sublime-project
+*.sublime-workspace
 
 # GitHub Copilot Instructions (local only)
 .github/
@@ -45,19 +47,28 @@ cookies.txt
 *.cookie
 *.cookies
 
+# Instaloader Session Files - NEVER COMMIT
+*.session
+session-*
+
 # Database
 *.db
 *.sqlite
 *.sqlite3
+app.db
 
 # Temp Files
-temp_videos/*.mp4
-temp_videos/*.mp3
-temp_videos/frames_*/
-temp_videos/test_*
+temp_videos/
+!temp_videos/.gitkeep
 
 # Roam Backup (contains processed content)
 roam_backup/
+!roam_backup/.gitkeep
+
+# Example/Sample Files (local only)
+note_example/
+app/prompts/examples/
+docs/
 
 # Logs
 *.log
@@ -66,8 +77,34 @@ logs/
 # OS Files
 .DS_Store
 Thumbs.db
+Desktop.ini
+ehthumbs.db
 
 # Test outputs
 .pytest_cache/
 .coverage
 htmlcov/
+.tox/
+.nox/
+coverage.xml
+*.cover
+*.py,cover
+
+# Jupyter Notebook
+.ipynb_checkpoints/
+
+# mypy
+.mypy_cache/
+.dmypy.json
+dmypy.json
+
+# Ruff
+.ruff_cache/
+
+# Model cache (Whisper downloads)
+*.bin
+*.pt
+models/
+
+# Faster-whisper cache
+~/.cache/huggingface/

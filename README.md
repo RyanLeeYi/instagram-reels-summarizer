@@ -5,21 +5,26 @@
 [![Ollama](https://img.shields.io/badge/Ollama-Local%20AI-orange.svg)](https://ollama.com/)
 [![License](https://img.shields.io/badge/License-Personal%20Use-lightgrey.svg)](#授權)
 
-> 透過 Telegram Bot 接收 Instagram Reels 連結，自動下載影片、轉錄語音、生成摘要，並同步至 Roam Research。
+> 透過 Telegram Bot 接收 Instagram Reels 連結，自動下載影片、轉錄語音、生成摘要，並同步至 Roam Research。完全免費，使用本地 AI 模型，無需任何 API Key。
 
 ---
 
 ## 目錄
 
 - [功能特色](#功能特色)
+- [技術堆疊](#技術堆疊)
 - [系統架構](#系統架構)
 - [系統需求](#系統需求)
 - [安裝步驟](#安裝步驟)
+- [專案結構](#專案結構)
 - [啟動服務](#啟動服務)
 - [使用方式](#使用方式)
 - [API 端點](#api-端點)
-- [專案結構](#專案結構)
+- [開發工作流程](#開發工作流程)
+- [編碼規範](#編碼規範)
+- [測試](#測試)
 - [故障排除](#故障排除)
+- [貢獻指南](#貢獻指南)
 - [授權](#授權)
 
 ---
@@ -31,8 +36,8 @@
 | 📱 **Telegram Bot 整合** | 直接分享 Instagram Reels 連結即可處理 | python-telegram-bot |
 | 🎬 **自動下載** | 下載 Instagram Reels 影片 | yt-dlp + cookies.txt |
 | 🎤 **語音轉錄** | 本地語音轉文字（免費、無需 API Key） | faster-whisper |
-| 👁️ **視覺分析** | 分析影片畫面（動態 8-10 幀、並行處理） | MiniCPM-V |
-| 📝 **AI 摘要** | 整合語音與畫面生成繁體中文摘要 | Ollama + Qwen2.5 |
+| 👁️ **視覺分析** | 分析影片畫面（動態 8-10 幀、並行處理） | MiniCPM-V / Gemma3 |
+| 📝 **AI 摘要** | 整合語音與畫面生成繁體中文摘要 | Ollama + Qwen |
 | 📚 **Roam Research 同步** | 本地備份 + 可選自動同步至 Roam | Claude Code + Roam MCP |
 | 🔄 **失敗重試** | 自動重試失敗的任務（最多 3 次） | APScheduler |
 | ⚡ **並行處理** | 幀分析支援並行加速 | asyncio |
@@ -42,8 +47,8 @@
 本專案使用本地 AI 模型，**不需要任何 API Key**：
 
 - **語音轉錄**：faster-whisper（本地運行）
-- **視覺分析**：MiniCPM-V（本地運行）
-- **摘要生成**：Ollama + Qwen2.5（本地運行）
+- **視覺分析**：MiniCPM-V / Gemma3（透過 Ollama 本地運行）
+- **摘要生成**：Ollama + Qwen（本地運行）
 
 ### 🔗 Claude Code MCP 同步（可選）
 
@@ -54,6 +59,26 @@
 - 即使同步失敗，本地備份仍會保留
 
 > 詳細設定請參考 [安裝步驟 - 設定 Claude Code MCP](#安裝步驟)
+
+---
+
+## 技術堆疊
+
+| 類別 | 技術 | 版本 |
+|------|------|------|
+| **程式語言** | Python | 3.10+ |
+| **Web 框架** | FastAPI | 0.109+ |
+| **Telegram Bot** | python-telegram-bot | 20.7+ |
+| **影片下載** | yt-dlp | 2024.12+ |
+| **語音轉錄** | faster-whisper | 1.0+ |
+| **摘要生成** | Ollama + Qwen | Latest |
+| **視覺分析** | Ollama + MiniCPM-V / Gemma3 | Latest |
+| **資料庫** | SQLite + SQLAlchemy | 2.0+ |
+| **非同步資料庫** | aiosqlite | 0.19+ |
+| **任務排程** | APScheduler | 3.10+ |
+| **HTTP 客戶端** | httpx | 0.25+ |
+| **設定管理** | pydantic-settings | 2.2+ |
+| **反向代理** | Cloudflare Tunnel | Latest |
 
 ---
 
@@ -440,35 +465,47 @@ https://www.instagram.com/reel/xxx
 instagram-reels-summarizer/
 ├── 📁 app/                      # 主要應用程式
 │   ├── __init__.py
-│   ├── main.py                  # FastAPI 入口
-│   ├── config.py                # 設定與環境變數
+│   ├── main.py                  # FastAPI 入口與 Webhook 路由
+│   ├── config.py                # Pydantic 設定與環境變數管理
 │   ├── 📁 bot/
-│   │   └── telegram_handler.py  # Telegram Bot 處理
+│   │   └── telegram_handler.py  # Telegram Bot 訊息處理
 │   ├── 📁 services/
-│   │   ├── downloader.py        # Instagram 下載
-│   │   ├── transcriber.py       # Whisper 轉錄
-│   │   ├── visual_analyzer.py   # MiniCPM-V 視覺分析
-│   │   ├── summarizer.py        # Ollama 摘要
-│   │   └── roam_sync.py         # Roam Research 同步
+│   │   ├── downloader.py        # Instagram 影片下載 (yt-dlp)
+│   │   ├── transcriber.py       # 語音轉錄 (faster-whisper)
+│   │   ├── visual_analyzer.py   # 視覺分析 (Ollama + Vision Model)
+│   │   ├── summarizer.py        # AI 摘要生成 (Ollama + LLM)
+│   │   ├── prompt_loader.py     # Prompt 模板載入器
+│   │   └── roam_sync.py         # Roam Research 本地同步
+│   ├── 📁 prompts/              # AI Prompt 模板
+│   │   ├── 📁 examples/         # 範例輸出
+│   │   ├── 📁 system/           # 系統提示詞
+│   │   └── 📁 templates/        # 使用者模板
 │   ├── 📁 scheduler/
-│   │   └── retry_job.py         # 重試排程
+│   │   └── retry_job.py         # 失敗任務重試排程
 │   └── 📁 database/
-│       └── models.py            # SQLite 模型
+│       └── models.py            # SQLite + SQLAlchemy 模型
 ├── 📁 scripts/                  # 手動測試腳本
-│   ├── test_download.py         # 下載測試
-│   ├── test_transcribe.py       # 轉錄測試
-│   ├── test_summarize.py        # 摘要測試
+│   ├── README.md                # 腳本使用說明
+│   ├── test_download.py         # 下載功能測試
+│   ├── test_transcribe.py       # 轉錄功能測試
+│   ├── test_summarize.py        # 摘要功能測試
 │   ├── test_visual.py           # 視覺分析測試
-│   ├── test_flow.py             # 完整流程測試
+│   ├── test_flow.py             # 完整流程測試（不含視覺）
 │   └── test_flow_visual.py      # 完整流程測試（含視覺）
 ├── 📁 tests/                    # pytest 單元測試
-│   ├── test_downloader.py
-│   └── test_summarizer.py
+│   ├── test_downloader.py       # 下載模組測試
+│   └── test_summarizer.py       # 摘要模組測試
+├── 📁 docs/                     # 專案文件
+│   ├── telegram-deduplication.md
+│   └── 📁 code-review/          # 程式碼審查紀錄
 ├── 📁 roam_backup/              # Roam Research 本地備份
-├── 📁 temp_videos/              # 暫存影片目錄
+├── 📁 temp_videos/              # 暫存影片目錄（自動清理）
+├── 📁 note_example/             # 輸出筆記範例
 ├── .env.example                 # 環境變數範例
-├── cookies.txt.example          # Cookies 範例
-├── requirements.txt             # Python 依賴
+├── cookies.txt.example          # Instagram Cookies 範例
+├── categories.txt               # 分類清單
+├── requirements.txt             # Python 依賴套件
+├── instagram-reels-summarizer-spec.md  # 完整功能規格
 ├── start.bat                    # Windows 啟動腳本 (CMD)
 ├── start.ps1                    # Windows 啟動腳本 (PowerShell)
 └── README.md                    # 專案說明
@@ -524,8 +561,8 @@ instagram-reels-summarizer/
 
 **可能原因與解決方案：**
 - Ollama 服務未啟動 → 執行 `ollama serve`
-- 模型未下載 → 執行 `ollama pull qwen2.5:7b` 和 `ollama pull minicpm-v`
-- 記憶體不足 → 嘗試使用較小的模型（如 `qwen2.5:3b`）
+- 模型未下載 → 執行 `ollama pull qwen3:8b` 和 `ollama pull gemma3:4b`
+- 記憶體不足 → 嘗試使用較小的模型
 
 </details>
 
@@ -546,23 +583,120 @@ pip install --upgrade yt-dlp
 
 ---
 
-## 技術堆疊
+## 開發工作流程
 
-| 類別 | 技術 |
-|------|------|
-| **Web 框架** | FastAPI |
-| **Telegram Bot** | python-telegram-bot |
-| **影片下載** | yt-dlp |
-| **語音轉錄** | faster-whisper |
-| **摘要生成** | Ollama + Qwen2.5 |
-| **視覺分析** | Ollama + MiniCPM-V |
-| **資料庫** | SQLite + SQLAlchemy |
-| **任務排程** | APScheduler |
-| **反向代理** | Cloudflare Tunnel |
+### 分支策略
+
+1. **main** - 穩定的生產版本
+2. **feature/*** - 新功能開發分支
+3. **fix/*** - 錯誤修復分支
+
+### 開發流程
+
+```
+1. 建立功能分支
+   git checkout -b feature/amazing-feature
+
+2. 執行測試腳本驗證功能
+   python scripts/test_flow_visual.py
+
+3. 執行單元測試
+   pytest tests/
+
+4. 提交變更
+   git commit -m 'Add amazing feature'
+
+5. 推送並建立 Pull Request
+   git push origin feature/amazing-feature
+```
+
+### 測試流程
+
+建議按以下順序執行測試腳本，確保每個模組正常運作：
+
+1. **下載測試** - 確認 cookies.txt 和 yt-dlp 正常
+2. **轉錄測試** - 確認 faster-whisper 正常
+3. **摘要測試** - 確認 Ollama 服務和模型正常
+4. **視覺分析測試** - 確認視覺模型正常
+5. **完整流程測試** - 端對端驗證
+
+詳細說明請參考 [scripts/README.md](scripts/README.md)
+
+---
+
+## 編碼規範
+
+### Python 程式碼風格
+
+- 遵循 PEP 8 編碼規範
+- 使用 Type Hints 標註函數參數與回傳值
+- 函數與類別使用 docstring 說明用途
+- 設定管理使用 Pydantic Settings
+- 非同步操作使用 `async/await` 語法
+
+### 檔案組織
+
+- 服務邏輯放置於 `app/services/`
+- Bot 處理邏輯放置於 `app/bot/`
+- 資料庫模型放置於 `app/database/`
+- 排程任務放置於 `app/scheduler/`
+- Prompt 模板放置於 `app/prompts/`
+
+### 錯誤處理
+
+- 使用適當的例外處理機制
+- 記錄失敗任務至資料庫以便重試
+- 回傳有意義的錯誤訊息給使用者
+
+### 安全性考量
+
+- 敏感資料（cookies、tokens）不納入版本控制
+- 使用環境變數管理機密設定
+- Telegram 訊息驗證使用 Chat ID 白名單
+- 處理完成後刪除暫存影片檔案
+
+---
+
+## 測試
+
+### 單元測試
+
+使用 pytest 進行單元測試：
+
+```bash
+# 執行所有測試
+pytest tests/
+
+# 執行特定測試檔案
+pytest tests/test_downloader.py
+
+# 執行並顯示詳細輸出
+pytest tests/ -v
+```
+
+### 手動測試腳本
+
+專案提供手動測試腳本，用於單獨測試各個模組：
+
+```bash
+# 從專案根目錄執行
+python scripts/test_download.py      # 測試下載功能
+python scripts/test_transcribe.py    # 測試轉錄功能
+python scripts/test_summarize.py     # 測試摘要功能
+python scripts/test_visual.py        # 測試視覺分析
+python scripts/test_flow_visual.py   # 完整流程測試
+```
+
+### 測試覆蓋範圍
+
+- **test_downloader.py** - Instagram 影片下載測試
+- **test_summarizer.py** - AI 摘要生成測試
 
 ---
 
 ## 貢獻指南
+
+### 如何貢獻
 
 1. Fork 此專案
 2. 建立功能分支（`git checkout -b feature/amazing-feature`）
@@ -570,11 +704,58 @@ pip install --upgrade yt-dlp
 4. 推送分支（`git push origin feature/amazing-feature`）
 5. 開啟 Pull Request
 
+### 程式碼審查
+
+提交 Pull Request 前，請確保：
+
+- 程式碼遵循專案的編碼規範
+- 新增功能已包含對應的測試
+- 所有現有測試通過
+- 更新相關文件（如適用）
+
+參考程式碼範例可查看 `app/services/` 目錄中的現有模組實作。
+
+### 安全性審查
+
+專案包含安全審查指引，請參考：
+- [.github/agents/se-security-reviewer.agent.md](.github/agents/se-security-reviewer.agent.md) - 安全審查標準
+- [.github/instructions/code-review-generic.instructions.md](.github/instructions/code-review-generic.instructions.md) - 程式碼審查指引
+
 ---
 
 ## 授權
 
 本專案僅供個人學習使用。
+
+---
+
+## 相關文件
+
+| 文件 | 說明 |
+|------|------|
+| [instagram-reels-summarizer-spec.md](instagram-reels-summarizer-spec.md) | 完整功能規格與技術規格 |
+| [scripts/README.md](scripts/README.md) | 測試腳本使用說明 |
+| [docs/telegram-deduplication.md](docs/telegram-deduplication.md) | Telegram 訊息去重機制說明 |
+
+---
+
+## 已知限制
+
+- Instagram 可能會更改網頁結構，需定期更新 yt-dlp
+- 部分 Reels 可能有版權保護無法下載
+- faster-whisper 對於背景音樂較大的影片，轉錄品質可能較差
+- 本地 LLM 摘要品質取決於模型大小
+- 首次執行需下載模型，需要額外時間
+
+---
+
+## 未來規劃
+
+- 支援 TikTok、YouTube Shorts 等其他短影片平台
+- 加入影片分類自動標籤功能
+- 支援多語言摘要輸出
+- 建立 Web Dashboard 查看處理歷史
+- 支援 GPU 加速提升處理速度
 
 ---
 

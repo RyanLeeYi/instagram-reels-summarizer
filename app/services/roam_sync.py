@@ -86,7 +86,7 @@ class RoamSyncService:
         # 構建重點列表
         bullet_text = "\n".join([f"- {point}" for point in bullet_points])
 
-        content = f"""#Instagram摘要
+        content = f"""{{{{[[TODO]]}}}} #[[Instagram摘要]]
 
 ## 來源資訊
 
@@ -225,6 +225,63 @@ class RoamSyncService:
                 error_message=f"儲存失敗: {error_msg}",
             )
 
+    async def save_post_note(
+        self,
+        post_title: str,
+        markdown_content: str,
+        caption: str,
+    ) -> RoamSyncResult:
+        """
+        儲存 Instagram 貼文筆記（包含原始貼文文字）
+
+        Args:
+            post_title: 貼文標題（用於生成檔名）
+            markdown_content: LLM 生成的完整 Markdown 內容
+            caption: 原始貼文說明文字
+
+        Returns:
+            RoamSyncResult: 同步結果
+        """
+        try:
+            page_title = self._generate_page_title(post_title)
+            
+            # 在 Markdown 內容末尾附加原始貼文
+            appendix = self._format_post_appendix(caption)
+            full_content = markdown_content + appendix
+            
+            # 儲存筆記
+            return await self._save_to_local(page_title, full_content)
+
+        except Exception as e:
+            error_msg = str(e)
+            logger.error(f"儲存貼文筆記失敗: {error_msg}")
+            return RoamSyncResult(
+                success=False,
+                error_message=f"儲存失敗: {error_msg}",
+            )
+
+    def _format_post_appendix(
+        self,
+        caption: str,
+    ) -> str:
+        """
+        格式化貼文附錄（原始貼文文字）
+
+        Args:
+            caption: 原始貼文說明文字
+
+        Returns:
+            str: 格式化後的 Markdown 附錄
+        """
+        if not caption or not caption.strip():
+            return ""
+        
+        appendix = "\n\n---\n\n## 附錄\n\n"
+        appendix += "### 原始貼文\n\n"
+        appendix += f"> {caption.replace(chr(10), chr(10) + '> ')}\n\n"
+        
+        return appendix
+
     async def _sync_via_claude_code(self, file_path: Path, page_title: str) -> bool:
         """
         使用 Claude Code CLI 同步 Markdown 到 Roam Research
@@ -250,6 +307,11 @@ class RoamSyncService:
             prompt = f'''請使用 roam_create_page 工具將以下 Markdown 內容建立為 Roam Research 頁面。
 
 頁面標題: {page_title}
+
+【重要格式說明】
+1. 第一行的 `#Instagram摘要` 是 Roam 標籤，必須保留為 `#[[Instagram摘要]]` 格式以正確建立連結
+2. 所有以 `#` 開頭但不是 Markdown 標題（## 或 ###）的內容都是 Roam 標籤，需轉換為 `#[[標籤名]]` 格式
+3. Markdown 標題（## 來源資訊、## 摘要 等）保持原樣
 
 內容:
 {content}'''

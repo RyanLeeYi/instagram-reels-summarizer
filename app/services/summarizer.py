@@ -1,16 +1,55 @@
-"""Ollama 本地 AI 摘要生成服務（使用 Qwen2.5）"""
+"""Ollama 本地 AI 摘要生成服務（使用 Qwen3）"""
 
 import asyncio
 import logging
+import re
 from dataclasses import dataclass
 from typing import List, Optional
 
 import ollama
 
 from app.config import settings
+from app.services.prompt_loader import get_prompt_loader
 
 
 logger = logging.getLogger(__name__)
+
+
+def strip_thinking_tags(content: str) -> str:
+    """
+    移除 Qwen3 / MiniCPM-V 等模型的 thinking 標籤內容
+    
+    支援的標籤格式：
+    - <think>...</think> (完整標籤)
+    - <thinking>...</thinking> (完整標籤)
+    - <think>... (不完整標籤，被截斷的情況)
+    - <thinking>... (不完整標籤，被截斷的情況)
+    
+    Args:
+        content: 包含 thinking 標籤的原始內容
+        
+    Returns:
+        移除 thinking 標籤後的內容
+    """
+    if not content:
+        return content
+    
+    # 移除完整的 <think>...</think> 標籤（包含多行內容）
+    content = re.sub(r'<think>.*?</think>', '', content, flags=re.DOTALL)
+    
+    # 移除完整的 <thinking>...</thinking> 標籤（包含多行內容）
+    content = re.sub(r'<thinking>.*?</thinking>', '', content, flags=re.DOTALL)
+    
+    # 移除不完整的 <think> 標籤（沒有結束標籤的情況，被截斷）
+    content = re.sub(r'<think>.*$', '', content, flags=re.DOTALL)
+    
+    # 移除不完整的 <thinking> 標籤（沒有結束標籤的情況，被截斷）
+    content = re.sub(r'<thinking>.*$', '', content, flags=re.DOTALL)
+    
+    # 清理多餘的空白行
+    content = re.sub(r'\n{3,}', '\n\n', content)
+    
+    return content.strip()
 
 
 @dataclass
@@ -99,6 +138,8 @@ class OllamaSummarizer:
     def __init__(self):
         self.model = settings.ollama_model
         self.client = ollama.AsyncClient(host=settings.ollama_host)
+        # 初始化 PromptLoader（含快取機制）
+        self.prompt_loader = get_prompt_loader(settings.prompts_path)
 
     def _summarize_sync(self, transcript: str, visual_description: str = None) -> SummaryResult:
         """同步摘要方法"""
@@ -178,15 +219,18 @@ class OllamaSummarizer:
 
     def _parse_response(self, content: str) -> SummaryResult:
         """
-        解析 Claude 的回應
+        解析 LLM 的回應
 
         Args:
-            content: Claude 的回應內容
+            content: LLM 的回應內容
 
         Returns:
             SummaryResult: 解析後的摘要結果
         """
         try:
+            # 移除 thinking 標籤內容（Qwen3 等模型會輸出思考過程）
+            content = strip_thinking_tags(content)
+            
             summary = ""
             bullet_points = []
             tools_and_skills = []
@@ -313,7 +357,7 @@ class OllamaSummarizer:
 ## 輸出要求
 請生成符合以下格式的 Markdown 筆記，直接輸出 Markdown 內容，不要加額外說明：
 
-1. 必須以 `#Instagram摘要` 標籤開頭
+1. 必須以 `{{{{[[TODO]]}}}} #[[Instagram摘要]]` 開頭（這是 Roam Research 的頁面連結格式，必須包含雙層方括號，並在前面加上 TODO 標記）
 2. 必須包含以下區塊（使用 ## 標題）：
    - **來源資訊**：包含原始連結和處理時間
    - **摘要**：2-3 句話概述影片主要內容
@@ -339,7 +383,8 @@ class OllamaSummarizer:
         title: str,
         transcript: str,
         visual_description: str = None,
-        has_audio: bool = True
+        has_audio: bool = True,
+        caption: str = None,
     ) -> NoteResult:
         """同步生成筆記方法"""
         try:
@@ -347,26 +392,50 @@ class OllamaSummarizer:
             processed_time = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
             
             # 組合內容
-            if has_audio and transcript:
-                if visual_description:
-                    content = f"【語音逐字稿】\n{transcript}\n\n【畫面描述】\n{visual_description}"
-                else:
-                    content = f"【語音逐字稿】\n{transcript}"
-            else:
-                content = f"【此影片無語音，以下為畫面分析】\n{visual_description or transcript}"
+            content_parts = []
             
-            user_prompt = self.NOTE_PROMPT_TEMPLATE.format(
+            # 加入貼文說明文（如果有）
+            if caption and caption.strip():
+                content_parts.append(f"【影片說明文】\n{caption.strip()}")
+            
+            if has_audio and transcript:
+                content_parts.append(f"【語音逐字稿】\n{transcript}")
+                if visual_description:
+                    content_parts.append(f"【畫面描述】\n{visual_description}")
+            else:
+                content_parts.append(f"【此影片無語音，以下為畫面分析】\n{visual_description or transcript}")
+            
+            content = "\n\n".join(content_parts)
+            
+            # 根據 has_audio 選擇對應類別的隨機範例
+            example_category = "audio" if has_audio else "visual_only"
+            example_note = self.prompt_loader.get_random_example(example_category)
+            
+            # 從外部載入 Prompt 模板（含 fallback）
+            note_prompt_template = self.prompt_loader.load_prompt(
+                "templates/note_prompt",
+                fallback=self.NOTE_PROMPT_TEMPLATE
+            )
+            
+            user_prompt = note_prompt_template.format(
                 url=url,
                 title=title,
                 processed_time=processed_time,
-                content=content
+                content=content,
+                example_note=example_note
+            )
+            
+            # 從外部載入 System Prompt（含 fallback）
+            note_system_prompt = self.prompt_loader.load_prompt(
+                "system/note_system",
+                fallback=self.NOTE_SYSTEM_PROMPT
             )
             
             # 呼叫 Ollama
             response = ollama.chat(
                 model=self.model,
                 messages=[
-                    {"role": "system", "content": self.NOTE_SYSTEM_PROMPT},
+                    {"role": "system", "content": note_system_prompt},
                     {"role": "user", "content": user_prompt}
                 ],
                 options={
@@ -376,6 +445,9 @@ class OllamaSummarizer:
             )
 
             markdown_content = response["message"]["content"]
+            
+            # 移除 thinking 標籤內容（Qwen3 等模型會輸出思考過程）
+            markdown_content = strip_thinking_tags(markdown_content)
             
             # 提取摘要和重點用於 Telegram 回覆
             summary, bullet_points = self._extract_summary_for_telegram(markdown_content)
@@ -455,7 +527,8 @@ class OllamaSummarizer:
         title: str,
         transcript: str,
         visual_description: str = None,
-        has_audio: bool = True
+        has_audio: bool = True,
+        caption: str = None,
     ) -> NoteResult:
         """
         生成完整的 Markdown 筆記
@@ -466,6 +539,7 @@ class OllamaSummarizer:
             transcript: 影片逐字稿
             visual_description: 可選的視覺描述
             has_audio: 是否有語音內容
+            caption: 影片說明文（貼文內容）
 
         Returns:
             NoteResult: 筆記生成結果
@@ -480,10 +554,205 @@ class OllamaSummarizer:
         loop = asyncio.get_event_loop()
         return await loop.run_in_executor(
             None,
-            self._generate_note_sync,
+            lambda: self._generate_note_sync(
+                url, title, transcript, visual_description, has_audio, caption
+            )
+        )
+
+    # ==================== 貼文筆記生成功能 ====================
+
+    POST_NOTE_PROMPT_TEMPLATE = """請根據以下 Instagram 貼文內容，生成一份結構清晰的 Markdown 筆記。
+
+【語言要求】請務必使用繁體中文（台灣用語）撰寫所有內容。
+
+## 貼文資訊
+- 原始連結：{url}
+- 貼文標題：{title}
+- 處理時間：{processed_time}
+
+## 貼文內容
+
+【貼文說明】
+{caption}
+
+【圖片分析】
+{visual_description}
+
+## 輸出要求
+請生成符合以下格式的 Markdown 筆記，直接輸出 Markdown 內容，不要加額外說明：
+
+1. 必須以 `{{{{[[TODO]]}}}} #[[Instagram摘要]]` 開頭（這是 Roam Research 的頁面連結格式，必須包含雙層方括號，並在前面加上 TODO 標記）
+2. 必須包含以下區塊（使用 ## 標題）：
+   - **來源資訊**：包含原始連結和處理時間
+   - **摘要**：2-3 句話概述貼文主要內容
+   - **重點整理**：3-5 個要點的列表
+   - **工具與技術**：從【補充：工具與技術擷取】區塊中整理出圖片中「實際出現」的工具、技術名詞、平台服務等（若無則標註「無」）
+
+3. 可選區塊（根據內容決定是否需要）：
+   - **圖片觀察**：整合各張圖片的重點視覺資訊（不需逐張列出）
+   - **步驟說明**：如果是教學類內容，列出操作步驟
+   - **貼文原文**：保留原始貼文說明文字（如果有價值的話）
+
+4. 格式規範：
+   - 使用 - 作為列表符號
+   - 連結使用 [文字](網址) 格式
+   - 【重要】全部使用繁體中文，不要使用簡體中文
+   - 【重要】「工具與技術」區塊只列出圖片中實際出現的項目，不要自行推測或補充"""
+
+    def _generate_post_note_sync(
+        self,
+        url: str,
+        title: str,
+        caption: str,
+        visual_description: str,
+    ) -> NoteResult:
+        """同步生成貼文筆記方法"""
+        try:
+            from datetime import datetime
+            processed_time = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+            
+            # 嘗試從外部載入貼文專用 Prompt 模板
+            post_prompt_template = self.prompt_loader.load_prompt(
+                "templates/user_prompt_post",
+                fallback=None
+            )
+            
+            if post_prompt_template:
+                # 使用貼文專用 user prompt 模板
+                user_content = post_prompt_template.format(
+                    caption=caption or "（無貼文說明）",
+                    visual_description=visual_description
+                )
+                # 組合成完整 prompt
+                user_prompt = f"""請根據以下 Instagram 貼文內容，生成一份結構清晰的 Markdown 筆記。
+
+【語言要求】請務必使用繁體中文（台灣用語）撰寫所有內容。
+
+## 貼文資訊
+- 原始連結：{url}
+- 貼文標題：{title}
+- 處理時間：{processed_time}
+
+## 貼文內容
+{user_content}
+
+## 輸出要求
+請生成符合以下格式的 Markdown 筆記，直接輸出 Markdown 內容，不要加額外說明：
+
+1. 必須以 `{{{{[[TODO]]}}}} #[[Instagram摘要]]` 開頭（這是 Roam Research 的頁面連結格式，必須包含雙層方括號，並在前面加上 TODO 標記）
+2. 必須包含以下區塊（使用 ## 標題）：
+   - **來源資訊**：包含原始連結和處理時間
+   - **摘要**：2-3 句話概述貼文主要內容
+   - **重點整理**：3-5 個要點的列表
+   - **工具與技術**：從【補充：工具與技術擷取】區塊中整理出圖片中「實際出現」的工具、技術名詞、平台服務等（若無則標註「無」）
+
+3. 可選區塊（根據內容決定是否需要）：
+   - **圖片觀察**：整合各張圖片的重點視覺資訊（不需逐張列出）
+   - **步驟說明**：如果是教學類內容，列出操作步驟
+
+4. 格式規範：
+   - 使用 - 作為列表符號
+   - 連結使用 [文字](網址) 格式
+   - 【重要】全部使用繁體中文，不要使用簡體中文
+   - 【重要】「工具與技術」區塊只列出圖片中實際出現的項目，不要自行推測或補充"""
+            else:
+                # 使用內建模板
+                user_prompt = self.POST_NOTE_PROMPT_TEMPLATE.format(
+                    url=url,
+                    title=title,
+                    processed_time=processed_time,
+                    caption=caption or "（無貼文說明）",
+                    visual_description=visual_description
+                )
+            
+            # 從外部載入 System Prompt（含 fallback）
+            note_system_prompt = self.prompt_loader.load_prompt(
+                "system/note_system",
+                fallback=self.NOTE_SYSTEM_PROMPT
+            )
+            
+            # 呼叫 Ollama
+            response = ollama.chat(
+                model=self.model,
+                messages=[
+                    {"role": "system", "content": note_system_prompt},
+                    {"role": "user", "content": user_prompt}
+                ],
+                options={
+                    "temperature": 0.7,
+                    "num_predict": 4096,
+                }
+            )
+
+            markdown_content = response["message"]["content"]
+            
+            # 移除 thinking 標籤內容（Qwen3 等模型會輸出思考過程）
+            markdown_content = strip_thinking_tags(markdown_content)
+            
+            # 提取摘要和重點用於 Telegram 回覆
+            summary, bullet_points = self._extract_summary_for_telegram(markdown_content)
+            
+            logger.info("貼文 Markdown 筆記生成成功")
+            
+            return NoteResult(
+                success=True,
+                markdown_content=markdown_content,
+                summary=summary,
+                bullet_points=bullet_points,
+            )
+
+        except Exception as e:
+            error_msg = str(e)
+            logger.error(f"貼文筆記生成失敗: {error_msg}")
+
+            if "connection refused" in error_msg.lower():
+                return NoteResult(
+                    success=False,
+                    error_message="Ollama 服務未啟動，請執行 'ollama serve'",
+                )
+            elif "model" in error_msg.lower() and "not found" in error_msg.lower():
+                return NoteResult(
+                    success=False,
+                    error_message=f"模型 {self.model} 未安裝，請執行 'ollama pull {self.model}'",
+                )
+
+            return NoteResult(
+                success=False,
+                error_message=f"貼文筆記生成失敗: {error_msg}",
+            )
+
+    async def generate_post_note(
+        self,
+        url: str,
+        title: str,
+        caption: str,
+        visual_description: str,
+    ) -> NoteResult:
+        """
+        生成 Instagram 貼文的 Markdown 筆記
+
+        Args:
+            url: Instagram 原始連結
+            title: 貼文標題
+            caption: 貼文說明文字
+            visual_description: 圖片視覺描述
+
+        Returns:
+            NoteResult: 筆記生成結果
+        """
+        if not caption and not visual_description:
+            return NoteResult(
+                success=False,
+                error_message="沒有可用的內容（無貼文說明也無圖片描述）",
+            )
+
+        # 在執行緒池中執行（避免阻塞）
+        loop = asyncio.get_event_loop()
+        return await loop.run_in_executor(
+            None,
+            self._generate_post_note_sync,
             url,
             title,
-            transcript,
-            visual_description,
-            has_audio
+            caption,
+            visual_description
         )

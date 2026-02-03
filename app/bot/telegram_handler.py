@@ -14,7 +14,7 @@ from telegram.ext import (
 )
 
 from app.config import settings
-from app.services.downloader import InstagramDownloader
+from app.services.downloader import InstagramDownloader, PostDownloadResult
 from app.services.transcriber import WhisperTranscriber
 from app.services.summarizer import OllamaSummarizer
 from app.services.roam_sync import RoamSyncService
@@ -63,6 +63,10 @@ class TelegramBotHandler:
             return match.group(0)
         return None
 
+    def _is_reel_url(self, url: str) -> bool:
+        """判斷 URL 是否為 Reel（影片）"""
+        return self.downloader.is_reel_url(url)
+
     async def _save_failed_task(
         self,
         instagram_url: str,
@@ -96,9 +100,9 @@ class TelegramBotHandler:
         welcome_message = """👋 歡迎使用 Instagram Reels 摘要 Bot！
 
 📱 使用方式：
-直接分享 Instagram Reels 連結給我，我會自動幫你：
-1. 下載影片
-2. 轉錄語音內容
+直接分享 Instagram 連結給我，我會自動幫你：
+1. 下載影片或貼文圖片
+2. 轉錄語音內容（影片）/ 分析圖片內容（貼文）
 3. 生成摘要與重點
 4. 同步到 Roam Research
 
@@ -107,9 +111,9 @@ class TelegramBotHandler:
 /status - 查看系統狀態
 
 🔗 支援的連結格式：
-• instagram.com/reel/xxx
-• instagram.com/p/xxx
-• instagram.com/reels/xxx
+• instagram.com/reel/xxx（影片 Reels）
+• instagram.com/reels/xxx（影片 Reels）
+• instagram.com/p/xxx（貼文/圖片/輪播圖）
 
 開始使用吧！✨"""
 
@@ -221,6 +225,27 @@ class TelegramBotHandler:
         # 發送處理中訊息
         processing_message = await update.message.reply_text("⏳ 處理中，請稍候...")
 
+        # 判斷內容類型：Reel（影片） vs Post（貼文/圖片）
+        is_reel = self._is_reel_url(instagram_url)
+        
+        if is_reel:
+            # Reel（影片）處理流程
+            await self._handle_reel(
+                instagram_url, chat_id, processing_message
+            )
+        else:
+            # 貼文（圖片）處理流程 - 嘗試使用 instaloader
+            await self._handle_post(
+                instagram_url, chat_id, processing_message
+            )
+
+    async def _handle_reel(
+        self,
+        instagram_url: str,
+        chat_id: str,
+        processing_message,
+    ) -> None:
+        """處理 Instagram Reel（影片）"""
         try:
             # 步驟 1: 下載影片
             logger.info(f"開始處理: {instagram_url}")
@@ -238,6 +263,7 @@ class TelegramBotHandler:
             audio_path = download_result.audio_path
             video_path = download_result.video_path
             video_title = download_result.title or "未知標題"
+            video_caption = download_result.caption  # 影片說明文
 
             try:
                 # 步驟 2: 轉錄語音
@@ -283,12 +309,17 @@ class TelegramBotHandler:
                 # 判斷是否有語音內容
                 has_audio = bool(transcript and transcript.strip())
                 
+                # 記錄是否有說明文
+                if video_caption:
+                    logger.info(f"影片說明文長度: {len(video_caption)} 字元")
+                
                 note_result = await self.summarizer.generate_note(
                     url=instagram_url,
                     title=video_title,
                     transcript=transcript if transcript else "",
                     visual_description=visual_description,
-                    has_audio=has_audio
+                    has_audio=has_audio,
+                    caption=video_caption,
                 )
 
                 if not note_result.success:
@@ -333,6 +364,111 @@ class TelegramBotHandler:
 
         except Exception as e:
             logger.error(f"處理過程發生錯誤: {e}")
+            await processing_message.edit_text(
+                f"❌ 處理過程發生錯誤\n\n{str(e)}\n\n請稍後再試。"
+            )
+
+    async def _handle_post(
+        self,
+        instagram_url: str,
+        chat_id: str,
+        processing_message,
+    ) -> None:
+        """處理 Instagram 貼文（圖片）"""
+        try:
+            # 步驟 1: 嘗試下載貼文圖片
+            logger.info(f"開始處理貼文: {instagram_url}")
+            await processing_message.edit_text("⏳ 下載貼文中...")
+            
+            post_result = await self.downloader.download_post(instagram_url)
+            
+            # 如果是影片貼文，改用影片處理流程
+            if not post_result.success and post_result.content_type == "reel":
+                logger.info("貼文為影片類型，切換至影片處理流程")
+                await self._handle_reel(instagram_url, chat_id, processing_message)
+                return
+            
+            if not post_result.success:
+                await self._save_failed_task(
+                    instagram_url, chat_id, ErrorType.DOWNLOAD, post_result.error_message
+                )
+                await processing_message.edit_text(
+                    f"❌ 下載失敗\n\n{post_result.error_message}\n\n已排入重試佇列。"
+                )
+                return
+            
+            image_paths = post_result.image_paths
+            caption = post_result.caption or ""
+            post_title = post_result.title or "未知標題"
+            
+            try:
+                # 步驟 2: 分析圖片（每張圖片獨立分析）
+                await processing_message.edit_text(
+                    f"⏳ 分析圖片中... (共 {len(image_paths)} 張)"
+                )
+                
+                visual_result = await self.visual_analyzer.analyze_images(image_paths)
+                
+                if not visual_result.success:
+                    error_msg = visual_result.error_message or "圖片分析失敗"
+                    await self._save_failed_task(
+                        instagram_url, chat_id, ErrorType.TRANSCRIBE, error_msg
+                    )
+                    await processing_message.edit_text(f"❌ 處理失敗\n\n{error_msg}")
+                    return
+                
+                visual_description = visual_result.overall_visual_summary
+                logger.info(f"圖片分析完成，共 {len(visual_result.frame_descriptions)} 張")
+                
+                # 步驟 3: 使用 LLM 生成完整 Markdown 筆記
+                await processing_message.edit_text("⏳ 生成筆記中...")
+                
+                note_result = await self.summarizer.generate_post_note(
+                    url=instagram_url,
+                    title=post_title,
+                    caption=caption,
+                    visual_description=visual_description,
+                )
+                
+                if not note_result.success:
+                    await self._save_failed_task(
+                        instagram_url, chat_id, ErrorType.SUMMARIZE, note_result.error_message
+                    )
+                    await processing_message.edit_text(
+                        f"❌ 筆記生成失敗\n\n{note_result.error_message}\n\n已排入重試佇列。"
+                    )
+                    return
+                
+                # 步驟 4: 儲存 LLM 生成的 Markdown 筆記（包含原始貼文文字）
+                roam_result = await self.roam_sync.save_post_note(
+                    post_title=post_title,
+                    markdown_content=note_result.markdown_content,
+                    caption=caption,
+                )
+                
+                if not roam_result.success:
+                    logger.warning(f"筆記儲存失敗: {roam_result.error_message}")
+                    await self._save_failed_task(
+                        instagram_url, chat_id, ErrorType.SYNC, roam_result.error_message
+                    )
+                
+                # 構建回覆訊息
+                reply_message = self._format_reply_simple(
+                    summary=note_result.summary,
+                    bullet_points=note_result.bullet_points,
+                    roam_result=roam_result,
+                    instagram_url=instagram_url
+                )
+                
+                await processing_message.edit_text(reply_message)
+                logger.info(f"貼文處理完成: {instagram_url}")
+                
+            finally:
+                # 清理暫存圖片檔案（圖片已複製到 roam_backup）
+                await self.downloader.cleanup_post_images(image_paths)
+        
+        except Exception as e:
+            logger.error(f"處理貼文過程發生錯誤: {e}")
             await processing_message.edit_text(
                 f"❌ 處理過程發生錯誤\n\n{str(e)}\n\n請稍後再試。"
             )

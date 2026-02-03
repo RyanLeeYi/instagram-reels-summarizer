@@ -21,8 +21,8 @@ class Settings(BaseSettings):
 
     # Ollama 本地 LLM 設定
     ollama_host: str = Field(default="http://localhost:11434", env="OLLAMA_HOST")
-    ollama_model: str = Field(default="qwen2.5:7b", env="OLLAMA_MODEL")
-    ollama_vision_model: str = Field(default="minicpm-v", env="OLLAMA_VISION_MODEL")
+    ollama_model: str = Field(default="qwen3:8b", env="OLLAMA_MODEL")
+    ollama_vision_model: str = Field(default="gemma3:4b", env="OLLAMA_VISION_MODEL")
 
     # Roam Research
     roam_graph_name: str = Field(..., env="ROAM_GRAPH_NAME")
@@ -42,6 +42,14 @@ class Settings(BaseSettings):
         default="sqlite+aiosqlite:///./app.db", env="DATABASE_URL"
     )
 
+    # Prompt 模板設定
+    prompts_path: str = Field(default="./app/prompts", env="PROMPTS_PATH")
+
+    # Instaloader Session 設定
+    instaloader_session_path: str = Field(
+        default="./temp_videos", env="INSTALOADER_SESSION_PATH"
+    )
+
     @property
     def allowed_chat_ids(self) -> List[str]:
         """解析允許的 chat_id 列表"""
@@ -57,6 +65,13 @@ class Settings(BaseSettings):
     def temp_video_path(self) -> Path:
         """取得暫存影片目錄路徑"""
         path = Path(self.temp_video_dir)
+        path.mkdir(parents=True, exist_ok=True)
+        return path
+
+    @property
+    def instaloader_session_dir(self) -> Path:
+        """取得 Instaloader session 存放目錄"""
+        path = Path(self.instaloader_session_path)
         path.mkdir(parents=True, exist_ok=True)
         return path
 
