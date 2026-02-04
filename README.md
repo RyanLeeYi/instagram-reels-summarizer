@@ -37,18 +37,23 @@
 | 🎬 **自動下載** | 下載 Instagram Reels 影片 | yt-dlp + cookies.txt |
 | 🎤 **語音轉錄** | 本地語音轉文字（免費、無需 API Key） | faster-whisper |
 | 👁️ **視覺分析** | 分析影片畫面（動態 8-10 幀、並行處理） | Gemma3 / MiniCPM-V |
-| 📝 **AI 摘要** | 整合語音與畫面生成繁體中文摘要 | Ollama + Qwen3 |
+| 📝 **AI 摘要** | 整合語音與畫面生成繁體中文摘要 | Ollama / Claude CLI / Copilot CLI |
 | 📚 **Roam Research 同步** | 本地備份 + 可選自動同步至 Roam | Claude Code + Roam MCP |
 | 🔄 **失敗重試** | 自動重試失敗的任務（最多 3 次） | APScheduler |
 | ⚡ **並行處理** | 幀分析支援並行加速 | asyncio |
 
-### 💡 完全免費
+### 💡 彈性選擇：本地或雲端
 
-本專案使用本地 AI 模型，**不需要任何 API Key**：
+**本地模式（完全免費，無需 API Key）：**
 
 - **語音轉錄**：faster-whisper（本地運行）
 - **視覺分析**：Gemma3 / MiniCPM-V（透過 Ollama 本地運行）
 - **摘要生成**：Ollama + Qwen3（本地運行）
+
+**雲端模式（需訂閱）：**
+
+- **Claude Code CLI**：使用 Claude Sonnet/Opus（需 Claude Pro 訂閱）
+- **GitHub Copilot CLI**：使用 GPT-4o/Claude（需 Copilot 訂閱）
 
 ### 🔗 Claude Code MCP 同步（可選）
 
@@ -71,7 +76,7 @@
 | **Telegram Bot** | python-telegram-bot | 20.7+ |
 | **影片下載** | yt-dlp | 2024.12+ |
 | **語音轉錄** | faster-whisper | 1.0+ |
-| **摘要生成** | Ollama + Qwen3 | Latest |
+| **摘要生成** | Ollama / Claude Code CLI / Copilot CLI | Latest |
 | **視覺分析** | Ollama + Gemma3 / MiniCPM-V | Latest |
 | **資料庫** | SQLite + SQLAlchemy | 2.0+ |
 | **非同步資料庫** | aiosqlite | 0.19+ |
@@ -255,7 +260,12 @@ TELEGRAM_ALLOWED_CHAT_IDS=your_chat_id
 WHISPER_MODEL_SIZE=base    # tiny, base, small, medium, large-v2, large-v3
 WHISPER_DEVICE=cpu         # cpu 或 cuda (需要 NVIDIA GPU)
 
-# Ollama 本地 LLM 設定
+# 摘要服務選擇
+SUMMARIZER_BACKEND=ollama  # ollama（本地）、claude（Claude Code CLI）或 copilot（GitHub Copilot CLI）
+CLAUDE_MODEL=sonnet        # sonnet, opus, haiku（僅 claude backend 使用）
+COPILOT_MODEL=claude-opus-4.5  # gpt-4o, claude-sonnet-4.5, claude-opus-4.5（僅 copilot backend 使用）
+
+# Ollama 本地 LLM 設定（SUMMARIZER_BACKEND=ollama 時使用）
 OLLAMA_HOST=http://localhost:11434
 OLLAMA_MODEL=qwen3:8b      # 可選: qwen2.5:7b, qwen2.5:14b
 OLLAMA_VISION_MODEL=gemma3:4b  # 可選: minicpm-v
@@ -475,6 +485,7 @@ instagram-reels-summarizer/
 │   │   └── telegram_handler.py  # Telegram Bot 訊息處理
 │   ├── 📁 services/
 │   │   ├── downloader.py        # Instagram 影片下載 (yt-dlp)
+│   │   ├── download_logger.py   # 下載記錄（大小與連結）
 │   │   ├── transcriber.py       # 語音轉錄 (faster-whisper)
 │   │   ├── visual_analyzer.py   # 視覺分析 (Ollama + Vision Model)
 │   │   ├── summarizer.py        # AI 摘要生成 (Ollama + LLM)

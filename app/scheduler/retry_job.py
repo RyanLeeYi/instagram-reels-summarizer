@@ -18,7 +18,7 @@ from app.database.models import (
 )
 from app.services.downloader import InstagramDownloader
 from app.services.transcriber import WhisperTranscriber
-from app.services.summarizer import OllamaSummarizer
+from app.services.summarizer_factory import get_summarizer
 from app.services.roam_sync import RoamSyncService
 
 
@@ -32,7 +32,7 @@ class RetryScheduler:
         self.scheduler = AsyncIOScheduler()
         self.downloader = InstagramDownloader()
         self.transcriber = WhisperTranscriber()
-        self.summarizer = OllamaSummarizer()
+        self.summarizer = get_summarizer()
         self.roam_sync = RoamSyncService()
         self.bot: Optional[Bot] = None
 

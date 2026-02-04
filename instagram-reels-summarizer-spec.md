@@ -16,7 +16,7 @@
 | Telegram Bot 接收連結 | 接收使用者分享的 Instagram Reels 連結 | 高 |
 | Instagram 影片下載 | 解析連結並下載 Reels 短影片 | 高 |
 | 語音轉逐字稿 | 使用 faster-whisper 本地模型將影片音訊轉為文字 | 高 |
-| AI 摘要生成 | 使用 Ollama + Qwen2.5 本地模型生成摘要與條列重點（繁體中文） | 高 |
+| AI 摘要生成 | 多後端支援：Ollama（本地）/ Claude Code CLI / GitHub Copilot CLI | 高 |
 | 視覺分析 | 使用 MiniCPM-V 分析影片畫面內容（動態 8-10 幀、並行處理） | 中 |
 | 工具與技能提取 | 從摘要中提取工具、技能、步驟等清單（必填欄位） | 中 |
 | Telegram 回覆 | 回傳摘要、重點、畫面觀察與 Roam 頁面連結 | 高 |
@@ -86,7 +86,7 @@
 | Telegram Bot | python-telegram-bot 套件 |
 | Instagram 下載 | yt-dlp + cookies.txt 認證 |
 | 語音轉錄 | faster-whisper 本地模型 |
-| 摘要生成 | Ollama + Qwen2.5 本地模型 |
+| 摘要生成 | Ollama（本地）/ Claude Code CLI / GitHub Copilot CLI |
 | 視覺分析 | Ollama + MiniCPM-V 本地模型 |
 | Roam 整合 | 本地 Markdown 檔案儲存 |
 | 任務排程 | APScheduler |
@@ -254,7 +254,9 @@ https://www.instagram.com/reel/xxx
 | Telegram Bot API | 接收訊息與回覆 | Bot Token |
 | Instagram | 下載 Reels 影片 | cookies.txt（從瀏覽器匯出） |
 | faster-whisper | 本地語音轉錄 | 無（本地模型） |
-| Ollama + Qwen2.5 | 本地摘要生成 | 無（本地模型） |
+| Ollama + Qwen2.5 | 本地摘要生成（預設） | 無（本地模型） |
+| Claude Code CLI | 雲端摘要生成（可選） | Claude Pro 訂閱 |
+| GitHub Copilot CLI | 雲端摘要生成（可選） | Copilot 訂閱 |
 | Ollama + MiniCPM-V | 本地視覺分析 | 無（本地模型） |
 | Roam Research | 本地 Markdown 儲存 | 無 |
 
@@ -279,10 +281,15 @@ TELEGRAM_ALLOWED_CHAT_IDS=your_chat_id
 WHISPER_MODEL_SIZE=base  # tiny, base, small, medium, large-v2, large-v3
 WHISPER_DEVICE=cpu       # cpu 或 cuda
 
-# Ollama 本地 LLM 設定
+# 摘要服務選擇
+SUMMARIZER_BACKEND=ollama  # ollama（本地）、claude（Claude Code CLI）或 copilot（GitHub Copilot CLI）
+CLAUDE_MODEL=sonnet        # sonnet, opus, haiku（僅 claude backend 使用）
+COPILOT_MODEL=claude-opus-4.5  # gpt-4o, claude-sonnet-4.5, claude-opus-4.5（僅 copilot backend 使用）
+
+# Ollama 本地 LLM 設定（SUMMARIZER_BACKEND=ollama 時使用）
 OLLAMA_HOST=http://localhost:11434
 OLLAMA_MODEL=qwen2.5:7b  # 可選: qwen2.5:3b, qwen2.5:14b
-OLLAMA_VISION_MODEL=minicpm-v  # 視覺分析模型
+OLLAMA_VISION_MODEL=minicpm-v  # 視覺分析模型（固定使用 Ollama）
 
 # Roam Research
 ROAM_GRAPH_NAME=your_graph_name
@@ -365,6 +372,9 @@ instagram-reels-summarizer/
 │   │   ├── downloader.py       # Instagram 下載 (yt-dlp)
 │   │   ├── transcriber.py      # 本地 Whisper 轉錄 (faster-whisper)
 │   │   ├── summarizer.py       # 本地 LLM 摘要 (Ollama + Qwen2.5)
+│   │   ├── claude_summarizer.py  # Claude Code CLI 摘要
+│   │   ├── copilot_summarizer.py # GitHub Copilot CLI 摘要
+│   │   ├── summarizer_factory.py # 摘要服務工廠（自動選擇後端）
 │   │   ├── visual_analyzer.py  # 視覺分析 (Ollama + MiniCPM-V)
 │   │   └── roam_sync.py        # Markdown 儲存
 │   ├── scheduler/
@@ -427,3 +437,4 @@ instagram-reels-summarizer/
 *更新: 2026-01-21 動態幀數（8-10 幀）根據影片長度調整*
 *更新: 2026-01-21 幀分析並行處理（預設 2 並行）*
 *更新: 2026-01-21 Claude Code MCP 自動同步到 Roam Research*
+*更新: 2026-02-04 新增多後端摘要服務支援（Ollama / Claude Code CLI / GitHub Copilot CLI）*

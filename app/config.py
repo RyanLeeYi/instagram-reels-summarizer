@@ -24,6 +24,11 @@ class Settings(BaseSettings):
     ollama_model: str = Field(default="qwen3:8b", env="OLLAMA_MODEL")
     ollama_vision_model: str = Field(default="gemma3:4b", env="OLLAMA_VISION_MODEL")
 
+    # 摘要服務設定 (ollama, claude, copilot)
+    summarizer_backend: str = Field(default="ollama", env="SUMMARIZER_BACKEND")
+    claude_model: str = Field(default="sonnet", env="CLAUDE_MODEL")  # sonnet, opus, haiku
+    copilot_model: str = Field(default="claude-sonnet-4.5", env="COPILOT_MODEL")  # claude-sonnet-4.5, gpt-5, etc.
+
     # Roam Research
     roam_graph_name: str = Field(..., env="ROAM_GRAPH_NAME")
 

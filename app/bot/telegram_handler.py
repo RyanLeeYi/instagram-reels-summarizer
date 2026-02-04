@@ -16,9 +16,10 @@ from telegram.ext import (
 from app.config import settings
 from app.services.downloader import InstagramDownloader, PostDownloadResult
 from app.services.transcriber import WhisperTranscriber
-from app.services.summarizer import OllamaSummarizer
+from app.services.summarizer_factory import get_summarizer
 from app.services.roam_sync import RoamSyncService
 from app.services.visual_analyzer import VideoVisualAnalyzer
+from app.services.download_logger import DownloadLogger
 from app.database.models import (
     FailedTask,
     ErrorType,
@@ -41,9 +42,10 @@ class TelegramBotHandler:
     def __init__(self):
         self.downloader = InstagramDownloader()
         self.transcriber = WhisperTranscriber()
-        self.summarizer = OllamaSummarizer()
+        self.summarizer = get_summarizer()
         self.roam_sync = RoamSyncService()
         self.visual_analyzer = VideoVisualAnalyzer()
+        self.download_logger = DownloadLogger()
         self.application: Optional[Application] = None
         # 用於防止重複處理同一訊息
         self._processed_message_ids: set[int] = set()
@@ -264,6 +266,14 @@ class TelegramBotHandler:
             video_path = download_result.video_path
             video_title = download_result.title or "未知標題"
             video_caption = download_result.caption  # 影片說明文
+            
+            # 記錄下載資訊
+            self.download_logger.log_reel_download(
+                instagram_url=instagram_url,
+                title=video_title,
+                video_size_bytes=download_result.video_size_bytes,
+                audio_size_bytes=download_result.audio_size_bytes,
+            )
 
             try:
                 # 步驟 2: 轉錄語音
@@ -400,6 +410,15 @@ class TelegramBotHandler:
             image_paths = post_result.image_paths
             caption = post_result.caption or ""
             post_title = post_result.title or "未知標題"
+            
+            # 記錄下載資訊
+            content_type = "post_carousel" if len(image_paths) > 1 else "post_image"
+            self.download_logger.log_post_download(
+                instagram_url=instagram_url,
+                title=post_title,
+                image_paths=image_paths,
+                content_type=content_type,
+            )
             
             try:
                 # 步驟 2: 分析圖片（每張圖片獨立分析）
