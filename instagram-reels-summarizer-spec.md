@@ -67,6 +67,7 @@
 
 | 情境 | 處理方式 |
 |------|---------|
+| URL 已處理過 | 查詢資料庫，回傳「📝 此連結已於 YYYY-MM-DD HH:MM 處理過」 |
 | Instagram 連結無效 | 回傳錯誤訊息：「無法解析此連結，請確認是否為有效的 Instagram Reels 連結」 |
 | 影片下載失敗 | 記錄連結至失敗清單，回傳「下載失敗，已排入重試佇列」 |
 | 語音轉錄失敗 | 記錄連結至失敗清單，回傳「轉錄失敗，已排入重試佇列」 |
@@ -74,6 +75,7 @@
 | Ollama 摘要失敗 | 記錄連結至失敗清單，回傳「摘要生成失敗，已排入重試佇列」 |
 | Roam Research 同步失敗 | 先回傳 Telegram 摘要，記錄同步失敗待重試 |
 | 重試 3 次仍失敗 | 回傳「處理失敗已達重試上限，請手動重新分享」 |
+| 網路超時 | 使用安全訊息編輯（_safe_edit_message），超時不中斷處理流程 |
 
 ## 3. 技術規格
 
@@ -146,6 +148,20 @@
 | created_at | DATETIME | 建立時間 |
 | last_retry_at | DATETIME | 最後重試時間 |
 | status | TEXT | 狀態（pending/success/abandoned） |
+
+#### 已處理 URL 記錄資料表 (SQLite)
+
+| 欄位名稱 | 型別 | 說明 |
+|---------|------|------|
+| id | INTEGER | 主鍵，自動遞增 |
+| url | TEXT | 已處理的 URL（唯一索引） |
+| url_type | TEXT | URL 類型（instagram_reel/instagram_post/threads） |
+| title | TEXT | 影片/貼文標題 |
+| telegram_chat_id | TEXT | Telegram 聊天室 ID |
+| note_path | TEXT | 筆記檔案路徑（可選） |
+| processed_at | DATETIME | 處理完成時間 |
+
+> **重複檢查機制**：收到 URL 時先查詢資料庫，若已處理過則回覆「📝 此連結已於 YYYY-MM-DD HH:MM 處理過」，避免重複處理。
 
 #### 摘要輸出格式
 
@@ -247,7 +263,33 @@ https://roamresearch.com/#/app/your-graph/page/xxx
 https://www.instagram.com/reel/xxx
 ```
 
-### 3.6 服務整合需求
+### 3.6 Prompt 與範例筆記系統
+
+為確保生成的筆記格式一致，系統使用外部 Prompt 模板和範例筆記：
+
+#### 資料夾結構
+
+```
+app/prompts/
+├── examples/           # 範例筆記
+│   ├── audio/         # 有語音的範例
+│   │   ├── mavenhq.md
+│   │   └── sundaskhalidd.md
+│   └── visual_only/   # 無語音的範例
+│       └── she_explores_data.md
+├── system/            # System Prompt
+│   └── note_system.txt
+└── templates/         # 使用者 Prompt 模板
+    └── note_prompt.txt
+```
+
+#### 運作機制
+
+1. 根據影片是否有語音（`has_audio`），選擇對應類別的隨機範例
+2. 將範例插入到 prompt 模板的 `{example_note}` 區塊
+3. 三種後端（Ollama / Claude CLI / Copilot CLI）皆使用相同的外部模板
+
+### 3.7 服務整合需求
 
 | 服務 | 用途 | 需要的認證 |
 |------|------|-----------|
@@ -270,7 +312,7 @@ https://www.instagram.com/reel/xxx
 4. 將檔案儲存為專案根目錄的 `cookies.txt`
 5. 確認檔案包含 `sessionid` cookie
 
-### 3.7 環境變數設定
+### 3.8 環境變數設定
 
 ```env
 # Telegram

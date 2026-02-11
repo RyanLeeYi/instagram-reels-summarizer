@@ -60,6 +60,8 @@ app.db
 # Temp Files
 temp_videos/
 !temp_videos/.gitkeep
+temp_script_*.json
+thread_html_debug.html
 
 # Roam Backup (contains processed content)
 roam_backup/

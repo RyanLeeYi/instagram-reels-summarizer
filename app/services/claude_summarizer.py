@@ -388,36 +388,46 @@ class ClaudeCodeSummarizer:
         """同步生成筆記方法"""
         try:
             from datetime import datetime
-            processed_time = datetime.now().strftime("%Y-%m-%d %H:%M")
+            processed_time = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
             
-            # 準備內容區塊
+            # 組合內容（與 Ollama 版本格式一致）
             content_parts = []
             
+            # 加入貼文說明文（如果有）
+            if caption and caption.strip():
+                content_parts.append(f"【影片說明文】\n{caption.strip()}")
+            
             if has_audio and transcript:
-                content_parts.append(f"### 語音逐字稿\n> {transcript}")
-            elif transcript:
-                content_parts.append(f"### 畫面描述\n*此影片無語音內容，以下為畫面描述*\n\n{transcript}")
-            
-            if visual_description:
-                content_parts.append(f"### 視覺分析\n{visual_description}")
-            
-            if caption:
-                content_parts.append(f"### 原始說明\n{caption}")
+                content_parts.append(f"【語音逐字稿】\n{transcript}")
+                if visual_description:
+                    content_parts.append(f"【畫面描述】\n{visual_description}")
+            else:
+                content_parts.append(f"【此影片無語音，以下為畫面分析】\n{visual_description or transcript}")
             
             content = "\n\n".join(content_parts)
             
-            # 載入自定義 prompt（如果有）
-            note_system_prompt = self.prompt_loader.load_prompt(
-                "note_system",
-                fallback=self.NOTE_SYSTEM_PROMPT
+            # 根據 has_audio 選擇對應類別的隨機範例
+            example_category = "audio" if has_audio else "visual_only"
+            example_note = self.prompt_loader.get_random_example(example_category)
+            
+            # 從外部載入 Prompt 模板（含 fallback）
+            note_prompt_template = self.prompt_loader.load_prompt(
+                "templates/note_prompt",
+                fallback=self.NOTE_PROMPT_TEMPLATE
             )
             
-            # 建立使用者 prompt
-            user_prompt = self.NOTE_PROMPT_TEMPLATE.format(
+            user_prompt = note_prompt_template.format(
                 url=url,
                 title=title,
                 processed_time=processed_time,
                 content=content,
+                example_note=example_note
+            )
+            
+            # 從外部載入 System Prompt（含 fallback）
+            note_system_prompt = self.prompt_loader.load_prompt(
+                "system/note_system",
+                fallback=self.NOTE_SYSTEM_PROMPT
             )
             
             # 呼叫 Claude CLI
@@ -641,6 +651,155 @@ class ClaudeCodeSummarizer:
             title,
             caption,
             visual_description,
+        )
+
+
+    # ==================== Threads 筆記生成功能 ====================
+
+    THREADS_NOTE_PROMPT_TEMPLATE = """請根據以下 Threads 串文內容，生成一份結構清晰的 Markdown 筆記。
+
+【語言要求】請務必使用繁體中文（台灣用語）撰寫所有內容。
+
+## 串文資訊
+- 原始連結：{url}
+- 作者：{author}
+- 處理時間：{processed_time}
+
+## 串文內容
+{content}
+
+直接輸出以下格式的 Markdown：
+
+## 來源資訊
+- 連結：[原始連結]({url})
+- 作者：{author}
+- 處理時間：{processed_time}
+
+## 摘要
+（2-3 句話概述）
+
+## 重點整理
+- 重點一
+- 重點二
+- 重點三
+
+## 提及的資源
+（工具、連結、書籍等，若無則標註「無」）"""
+
+    def _generate_threads_note_sync(
+        self,
+        url: str,
+        author: str,
+        content: str,
+        visual_description: str = None,
+        transcript: str = None,
+    ) -> NoteResult:
+        """同步生成 Threads 筆記方法"""
+        try:
+            from datetime import datetime
+            processed_time = datetime.now().strftime("%Y-%m-%d %H:%M")
+
+            # 組合完整內容（文字 + 媒體描述 + 轉錄）
+            full_content = content
+            if visual_description:
+                full_content += f"\n\n【媒體視覺描述】\n{visual_description}"
+            if transcript:
+                full_content += f"\n\n【影片語音轉錄】\n{transcript}"
+
+            # 嘗試從外部載入 Threads 專用 Prompt 模板
+            threads_prompt_template = self.prompt_loader.load_prompt(
+                "templates/threads_note_prompt",
+                fallback=None
+            )
+
+            if threads_prompt_template:
+                user_prompt = threads_prompt_template.format(
+                    url=url,
+                    author=author,
+                    processed_time=processed_time,
+                    content=full_content
+                )
+            else:
+                user_prompt = self.THREADS_NOTE_PROMPT_TEMPLATE.format(
+                    url=url,
+                    author=author,
+                    processed_time=processed_time,
+                    content=full_content
+                )
+
+            # 載入自定義 prompt（如果有）
+            note_system_prompt = self.prompt_loader.load_prompt(
+                "note_system",
+                fallback=self.NOTE_SYSTEM_PROMPT
+            )
+
+            # 呼叫 Claude CLI
+            markdown_content = self._run_claude_cli(user_prompt, note_system_prompt)
+
+            # 提取摘要和重點用於 Telegram 回覆
+            summary, bullet_points = self._extract_summary_for_telegram(markdown_content)
+
+            logger.info("Threads Markdown 筆記生成成功 (Claude Code)")
+
+            return NoteResult(
+                success=True,
+                markdown_content=markdown_content,
+                summary=summary,
+                bullet_points=bullet_points,
+            )
+
+        except Exception as e:
+            error_msg = str(e)
+            logger.error(f"Threads 筆記生成失敗: {error_msg}")
+
+            if "未安裝" in error_msg or "未找到" in error_msg:
+                return NoteResult(
+                    success=False,
+                    error_message="Claude Code CLI 未安裝",
+                )
+
+            return NoteResult(
+                success=False,
+                error_message=f"Threads 筆記生成失敗: {error_msg}",
+            )
+
+    async def generate_threads_note(
+        self,
+        url: str,
+        author: str,
+        content: str,
+        visual_description: str = None,
+        transcript: str = None,
+    ) -> NoteResult:
+        """
+        生成 Threads 串文的 Markdown 筆記
+
+        Args:
+            url: Threads 原始連結
+            author: 作者名稱
+            content: 串文內容（已格式化的文字）
+            visual_description: 圖片/影片視覺描述（可選）
+            transcript: 影片語音轉錄（可選）
+
+        Returns:
+            NoteResult: 筆記生成結果
+        """
+        if not content or not content.strip():
+            return NoteResult(
+                success=False,
+                error_message="沒有可用的串文內容",
+            )
+
+        # 在執行緒池中執行（避免阻塞）
+        loop = asyncio.get_event_loop()
+        return await loop.run_in_executor(
+            None,
+            self._generate_threads_note_sync,
+            url,
+            author,
+            content,
+            visual_description,
+            transcript,
         )
 
 

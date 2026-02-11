@@ -756,3 +756,173 @@ class OllamaSummarizer:
             caption,
             visual_description
         )
+
+    # ==================== Threads 筆記生成功能 ====================
+
+    THREADS_NOTE_PROMPT_TEMPLATE = """請根據以下 Threads 串文內容，生成一份結構清晰的 Markdown 筆記。
+
+【語言要求】請務必使用繁體中文（台灣用語）撰寫所有內容。
+
+## 串文資訊
+- 原始連結：{url}
+- 作者：{author}
+- 處理時間：{processed_time}
+
+## 串文內容
+{content}
+
+## 輸出要求
+請生成符合以下格式的 Markdown 筆記，直接輸出 Markdown 內容，不要加額外說明：
+
+1. 必須以 `{{{{[[TODO]]}}}} #[[Threads摘要]]` 開頭
+2. 必須包含以下區塊（使用 ## 標題）：
+   - **來源資訊**：包含原始連結、作者和處理時間
+   - **摘要**：2-3 句話概述串文主要內容
+   - **重點整理**：3-5 個要點的列表
+   - **提及的資源**：列出串文中提到的工具、軟體、連結等（若無則標註「無」）
+
+3. 可選區塊（根據內容決定是否需要）：
+   - **對話脈絡**：如果是多人討論的對話串
+   - **引用內容**：如果有引用其他貼文
+   - **步驟說明**：如果是教學類內容
+
+4. 格式規範：
+   - 使用 - 作為列表符號
+   - 連結使用 [文字](網址) 格式
+   - 【重要】全部使用繁體中文"""
+
+    def _generate_threads_note_sync(
+        self,
+        url: str,
+        author: str,
+        content: str,
+        visual_description: str = None,
+        transcript: str = None,
+    ) -> NoteResult:
+        """同步生成 Threads 筆記方法"""
+        try:
+            from datetime import datetime
+            processed_time = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+
+            # 組合完整內容（文字 + 媒體描述 + 轉錄）
+            full_content = content
+            if visual_description:
+                full_content += f"\n\n【媒體視覺描述】\n{visual_description}"
+            if transcript:
+                full_content += f"\n\n【影片語音轉錄】\n{transcript}"
+
+            # 嘗試從外部載入 Threads 專用 Prompt 模板
+            threads_prompt_template = self.prompt_loader.load_prompt(
+                "templates/threads_note_prompt",
+                fallback=None
+            )
+
+            if threads_prompt_template:
+                user_prompt = threads_prompt_template.format(
+                    url=url,
+                    author=author,
+                    processed_time=processed_time,
+                    content=full_content
+                )
+            else:
+                user_prompt = self.THREADS_NOTE_PROMPT_TEMPLATE.format(
+                    url=url,
+                    author=author,
+                    processed_time=processed_time,
+                    content=full_content
+                )
+
+            # 從外部載入 System Prompt（含 fallback）
+            note_system_prompt = self.prompt_loader.load_prompt(
+                "system/note_system",
+                fallback=self.NOTE_SYSTEM_PROMPT
+            )
+
+            # 呼叫 Ollama
+            response = ollama.chat(
+                model=self.model,
+                messages=[
+                    {"role": "system", "content": note_system_prompt},
+                    {"role": "user", "content": user_prompt}
+                ],
+                options={
+                    "temperature": 0.7,
+                    "num_predict": 4096,
+                }
+            )
+
+            markdown_content = response["message"]["content"]
+
+            # 移除 thinking 標籤內容
+            markdown_content = strip_thinking_tags(markdown_content)
+
+            # 提取摘要和重點用於 Telegram 回覆
+            summary, bullet_points = self._extract_summary_for_telegram(markdown_content)
+
+            logger.info("Threads Markdown 筆記生成成功")
+
+            return NoteResult(
+                success=True,
+                markdown_content=markdown_content,
+                summary=summary,
+                bullet_points=bullet_points,
+            )
+
+        except Exception as e:
+            error_msg = str(e)
+            logger.error(f"Threads 筆記生成失敗: {error_msg}")
+
+            if "connection refused" in error_msg.lower():
+                return NoteResult(
+                    success=False,
+                    error_message="Ollama 服務未啟動，請執行 'ollama serve'",
+                )
+            elif "model" in error_msg.lower() and "not found" in error_msg.lower():
+                return NoteResult(
+                    success=False,
+                    error_message=f"模型 {self.model} 未安裝，請執行 'ollama pull {self.model}'",
+                )
+
+            return NoteResult(
+                success=False,
+                error_message=f"Threads 筆記生成失敗: {error_msg}",
+            )
+
+    async def generate_threads_note(
+        self,
+        url: str,
+        author: str,
+        content: str,
+        visual_description: str = None,
+        transcript: str = None,
+    ) -> NoteResult:
+        """
+        生成 Threads 串文的 Markdown 筆記
+
+        Args:
+            url: Threads 原始連結
+            author: 作者名稱
+            content: 串文內容（已格式化的文字）
+            visual_description: 圖片/影片視覺描述（可選）
+            transcript: 影片語音轉錄（可選）
+
+        Returns:
+            NoteResult: 筆記生成結果
+        """
+        if not content or not content.strip():
+            return NoteResult(
+                success=False,
+                error_message="沒有可用的串文內容",
+            )
+
+        # 在執行緒池中執行（避免阻塞）
+        loop = asyncio.get_event_loop()
+        return await loop.run_in_executor(
+            None,
+            self._generate_threads_note_sync,
+            url,
+            author,
+            content,
+            visual_description,
+            transcript,
+        )

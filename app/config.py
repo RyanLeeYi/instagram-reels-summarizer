@@ -55,6 +55,13 @@ class Settings(BaseSettings):
         default="./temp_videos", env="INSTALOADER_SESSION_PATH"
     )
 
+    # Threads 設定
+    threads_username: str = Field(default="", env="THREADS_USERNAME")
+    threads_password: str = Field(default="", env="THREADS_PASSWORD")
+    threads_enabled: bool = Field(default=True, env="THREADS_ENABLED")
+    threads_fetch_replies: bool = Field(default=True, env="THREADS_FETCH_REPLIES")
+    threads_max_replies: int = Field(default=50, env="THREADS_MAX_REPLIES")
+
     @property
     def allowed_chat_ids(self) -> List[str]:
         """解析允許的 chat_id 列表"""

@@ -36,12 +36,13 @@ class RoamSyncService:
     def __init__(self):
         self.graph_name = settings.roam_graph_name
 
-    def _generate_page_title(self, video_title: str) -> str:
+    def _generate_page_title(self, video_title: str, prefix: str = "IG Reels") -> str:
         """
         生成 Roam 頁面標題
 
         Args:
-            video_title: 影片標題
+            video_title: 影片/貼文標題
+            prefix: 標題前綴（預設為 "IG Reels"）
 
         Returns:
             頁面標題
@@ -52,7 +53,7 @@ class RoamSyncService:
         clean_title = video_title.replace("[", "").replace("]", "")
         clean_title = clean_title[:50] if len(clean_title) > 50 else clean_title
 
-        return f"IG Reels - {now} - {clean_title}"
+        return f"{prefix} - {now} - {clean_title}"
 
     def _format_roam_content(
         self,
@@ -275,12 +276,44 @@ class RoamSyncService:
         """
         if not caption or not caption.strip():
             return ""
-        
+
         appendix = "\n\n---\n\n## 附錄\n\n"
         appendix += "### 原始貼文\n\n"
         appendix += f"> {caption.replace(chr(10), chr(10) + '> ')}\n\n"
-        
+
         return appendix
+
+    async def save_threads_note(
+        self,
+        author: str,
+        markdown_content: str,
+        original_url: str,
+    ) -> RoamSyncResult:
+        """
+        儲存 Threads 串文筆記
+
+        Args:
+            author: Threads 作者名稱
+            markdown_content: LLM 生成的完整 Markdown 內容
+            original_url: Threads 原始連結
+
+        Returns:
+            RoamSyncResult: 同步結果
+        """
+        try:
+            # 使用作者名稱作為標題的一部分
+            page_title = self._generate_page_title(f"@{author}", prefix="Threads")
+
+            # 直接使用 LLM 生成的內容
+            return await self._save_to_local(page_title, markdown_content)
+
+        except Exception as e:
+            error_msg = str(e)
+            logger.error(f"儲存 Threads 筆記失敗: {error_msg}")
+            return RoamSyncResult(
+                success=False,
+                error_message=f"儲存失敗: {error_msg}",
+            )
 
     async def _sync_via_claude_code(self, file_path: Path, page_title: str) -> bool:
         """

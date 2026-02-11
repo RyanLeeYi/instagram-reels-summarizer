@@ -41,6 +41,8 @@
 | 📚 **Roam Research 同步** | 本地備份 + 可選自動同步至 Roam | Claude Code + Roam MCP |
 | 🔄 **失敗重試** | 自動重試失敗的任務（最多 3 次） | APScheduler |
 | ⚡ **並行處理** | 幀分析支援並行加速 | asyncio |
+| 🔒 **URL 重複檢查** | 避免重複處理同一連結，提示已處理過 | SQLite |
+| 🌐 **網路容錯** | 網路超時不中斷處理，自動重試 | HTTPXRequest |
 
 ### 💡 彈性選擇：本地或雲端
 
@@ -492,13 +494,15 @@ instagram-reels-summarizer/
 │   │   ├── prompt_loader.py     # Prompt 模板載入器
 │   │   └── roam_sync.py         # Roam Research 本地同步
 │   ├── 📁 prompts/              # AI Prompt 模板
-│   │   ├── 📁 examples/         # 範例輸出
+│   │   ├── 📁 examples/         # 範例筆記（供 AI 參考）
+│   │   │   ├── 📁 audio/        # 有語音的影片範例
+│   │   │   └── 📁 visual_only/  # 純視覺影片範例
 │   │   ├── 📁 system/           # 系統提示詞
 │   │   └── 📁 templates/        # 使用者模板
 │   ├── 📁 scheduler/
 │   │   └── retry_job.py         # 失敗任務重試排程
 │   └── 📁 database/
-│       └── models.py            # SQLite + SQLAlchemy 模型
+│       └── models.py            # SQLite 模型（FailedJob + ProcessedURL）
 ├── 📁 scripts/                  # 手動測試腳本
 │   ├── README.md                # 腳本使用說明
 │   ├── test_download.py         # 下載功能測試

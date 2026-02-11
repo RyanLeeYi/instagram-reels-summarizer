@@ -12,9 +12,15 @@ from telegram.ext import (
     ContextTypes,
     filters,
 )
+from telegram.request import HTTPXRequest
 
 from app.config import settings
 from app.services.downloader import InstagramDownloader, PostDownloadResult
+from app.services.threads_downloader import (
+    ThreadsDownloader,
+    ThreadsDownloadResult,
+    ThreadsMediaDownloadResult,
+)
 from app.services.transcriber import WhisperTranscriber
 from app.services.summarizer_factory import get_summarizer
 from app.services.roam_sync import RoamSyncService
@@ -25,7 +31,10 @@ from app.database.models import (
     ErrorType,
     TaskStatus,
     AsyncSessionLocal,
+    check_url_processed,
+    save_processed_url,
 )
+from telegram.error import TelegramError, TimedOut, NetworkError
 
 
 logger = logging.getLogger(__name__)
@@ -39,8 +48,14 @@ class TelegramBotHandler:
         r"https?://(?:www\.)?instagram\.com/(?:reel|p|reels)/([A-Za-z0-9_-]+)"
     )
 
+    # Threads URL 正則表達式（支援 threads.net 和 threads.com）
+    THREADS_URL_PATTERN = re.compile(
+        r"https?://(?:www\.)?threads\.(?:net|com)/(?:@[\w.]+/post|t)/([A-Za-z0-9_-]+)"
+    )
+
     def __init__(self):
         self.downloader = InstagramDownloader()
+        self.threads_downloader = ThreadsDownloader()
         self.transcriber = WhisperTranscriber()
         self.summarizer = get_summarizer()
         self.roam_sync = RoamSyncService()
@@ -58,9 +73,39 @@ class TelegramBotHandler:
             return True
         return str(chat_id) in allowed_ids
 
+    async def _safe_edit_message(self, message, text: str) -> bool:
+        """安全地編輯訊息，處理網路超時等錯誤
+        
+        Args:
+            message: Telegram 訊息物件（可能為 None）
+            text: 要更新的文字
+            
+        Returns:
+            bool: 是否成功編輯訊息
+        """
+        if message is None:
+            logger.debug("訊息物件為 None，跳過編輯")
+            return False
+        try:
+            await message.edit_text(text)
+            return True
+        except (TimedOut, NetworkError) as e:
+            logger.warning(f"編輯訊息超時或網路錯誤，無法通知使用者: {e}")
+            return False
+        except TelegramError as e:
+            logger.warning(f"編輯訊息失敗: {e}")
+            return False
+
     def _extract_instagram_url(self, text: str) -> Optional[str]:
         """從訊息中提取 Instagram URL"""
         match = self.INSTAGRAM_URL_PATTERN.search(text)
+        if match:
+            return match.group(0)
+        return None
+
+    def _extract_threads_url(self, text: str) -> Optional[str]:
+        """從訊息中提取 Threads URL"""
+        match = self.THREADS_URL_PATTERN.search(text)
         if match:
             return match.group(0)
         return None
@@ -99,12 +144,12 @@ class TelegramBotHandler:
             await update.message.reply_text("⛔ 您沒有使用此 Bot 的權限。")
             return
 
-        welcome_message = """👋 歡迎使用 Instagram Reels 摘要 Bot！
+        welcome_message = """👋 歡迎使用社群內容摘要 Bot！
 
 📱 使用方式：
-直接分享 Instagram 連結給我，我會自動幫你：
-1. 下載影片或貼文圖片
-2. 轉錄語音內容（影片）/ 分析圖片內容（貼文）
+直接分享連結給我，我會自動幫你：
+1. 下載影片/貼文/串文
+2. 轉錄語音（影片）/ 分析圖片 / 整理文字
 3. 生成摘要與重點
 4. 同步到 Roam Research
 
@@ -113,9 +158,14 @@ class TelegramBotHandler:
 /status - 查看系統狀態
 
 🔗 支援的連結格式：
+📸 Instagram
 • instagram.com/reel/xxx（影片 Reels）
 • instagram.com/reels/xxx（影片 Reels）
 • instagram.com/p/xxx（貼文/圖片/輪播圖）
+
+🧵 Threads
+• threads.net/@user/post/xxx
+• threads.net/t/xxx
 
 開始使用吧！✨"""
 
@@ -209,27 +259,67 @@ class TelegramBotHandler:
             await update.message.reply_text("⛔ 您沒有使用此 Bot 的權限。")
             return
 
+        # 優先檢查是否為 Threads URL
+        threads_url = self._extract_threads_url(message_text)
+        if threads_url and settings.threads_enabled:
+            logger.info(f"收到訊息 ID {message_id}: {threads_url} (Threads)")
+            
+            # 檢查是否已處理過
+            existing = await check_url_processed(threads_url)
+            if existing:
+                logger.info(f"URL 已處理過: {threads_url}")
+                await update.message.reply_text(
+                    f"📝 此連結已於 {existing.processed_at.strftime('%Y-%m-%d %H:%M')} 處理過\n\n"
+                    f"標題：{existing.title or '未知'}"
+                )
+                return
+            
+            try:
+                processing_message = await update.message.reply_text("⏳ 處理 Threads 串文中...")
+            except (TimedOut, NetworkError) as e:
+                logger.warning(f"發送初始訊息超時，繼續處理: {e}")
+                processing_message = None
+            await self._handle_threads(threads_url, chat_id, processing_message)
+            return
+
         # 提取 Instagram URL
         instagram_url = self._extract_instagram_url(message_text)
 
         if not instagram_url:
             # 只有當訊息看起來像是想分享連結時才回覆
-            if "instagram" in message_text.lower() or "http" in message_text.lower():
+            if "instagram" in message_text.lower() or "threads" in message_text.lower() or "http" in message_text.lower():
                 await update.message.reply_text(
-                    "❓ 請分享有效的 Instagram Reels 連結。\n"
-                    "支援格式：instagram.com/reel/xxx 或 instagram.com/p/xxx"
+                    "❓ 請分享有效的連結。\n"
+                    "支援格式：\n"
+                    "• instagram.com/reel/xxx\n"
+                    "• instagram.com/p/xxx\n"
+                    "• threads.net/@user/post/xxx"
                 )
             # 否則忽略訊息，不回覆
             return
 
         logger.info(f"收到訊息 ID {message_id}: {instagram_url}")
 
-        # 發送處理中訊息
-        processing_message = await update.message.reply_text("⏳ 處理中，請稍候...")
+        # 檢查是否已處理過
+        existing = await check_url_processed(instagram_url)
+        if existing:
+            logger.info(f"URL 已處理過: {instagram_url}")
+            await update.message.reply_text(
+                f"📝 此連結已於 {existing.processed_at.strftime('%Y-%m-%d %H:%M')} 處理過\n\n"
+                f"標題：{existing.title or '未知'}"
+            )
+            return
+
+        # 發送處理中訊息（處理網路超時）
+        try:
+            processing_message = await update.message.reply_text("⏳ 處理中，請稍候...")
+        except (TimedOut, NetworkError) as e:
+            logger.warning(f"發送初始訊息超時，繼續處理: {e}")
+            processing_message = None
 
         # 判斷內容類型：Reel（影片） vs Post（貼文/圖片）
         is_reel = self._is_reel_url(instagram_url)
-        
+
         if is_reel:
             # Reel（影片）處理流程
             await self._handle_reel(
@@ -257,7 +347,8 @@ class TelegramBotHandler:
                 await self._save_failed_task(
                     instagram_url, chat_id, ErrorType.DOWNLOAD, download_result.error_message
                 )
-                await processing_message.edit_text(
+                await self._safe_edit_message(
+                    processing_message,
                     f"❌ 下載失敗\n\n{download_result.error_message}\n\n已排入重試佇列。"
                 )
                 return
@@ -296,7 +387,7 @@ class TelegramBotHandler:
                 # 步驟 2.5: 視覺分析
                 visual_description = None
                 if video_path and video_path.exists():
-                    await processing_message.edit_text("⏳ 分析畫面中...")
+                    await self._safe_edit_message(processing_message, "⏳ 分析畫面中...")
                     visual_result = await self.visual_analyzer.analyze(video_path)
                     if visual_result.success:
                         visual_description = visual_result.overall_visual_summary
@@ -310,11 +401,11 @@ class TelegramBotHandler:
                     await self._save_failed_task(
                         instagram_url, chat_id, ErrorType.TRANSCRIBE, error_msg
                     )
-                    await processing_message.edit_text(f"❌ 處理失敗\n\n{error_msg}")
+                    await self._safe_edit_message(processing_message, f"❌ 處理失敗\n\n{error_msg}")
                     return
 
                 # 步驟 3: 使用 LLM 生成完整 Markdown 筆記
-                await processing_message.edit_text("⏳ 生成筆記中...")
+                await self._safe_edit_message(processing_message, "⏳ 生成筆記中...")
                 
                 # 判斷是否有語音內容
                 has_audio = bool(transcript and transcript.strip())
@@ -336,7 +427,8 @@ class TelegramBotHandler:
                     await self._save_failed_task(
                         instagram_url, chat_id, ErrorType.SUMMARIZE, note_result.error_message
                     )
-                    await processing_message.edit_text(
+                    await self._safe_edit_message(
+                        processing_message,
                         f"❌ 筆記生成失敗\n\n{note_result.error_message}\n\n已排入重試佇列。"
                     )
                     return
@@ -362,7 +454,16 @@ class TelegramBotHandler:
                     instagram_url=instagram_url
                 )
 
-                await processing_message.edit_text(reply_message)
+                await self._safe_edit_message(processing_message, reply_message)
+                
+                # 儲存已處理的 URL
+                await save_processed_url(
+                    url=instagram_url,
+                    url_type="instagram_reel",
+                    chat_id=chat_id,
+                    title=video_title,
+                    note_path=None,
+                )
                 logger.info(f"處理完成: {instagram_url}")
 
             finally:
@@ -373,8 +474,9 @@ class TelegramBotHandler:
                     await self.downloader.cleanup(video_path)
 
         except Exception as e:
-            logger.error(f"處理過程發生錯誤: {e}")
-            await processing_message.edit_text(
+            logger.error(f"處理過程發生錯誤: {e}", exc_info=True)
+            await self._safe_edit_message(
+                processing_message,
                 f"❌ 處理過程發生錯誤\n\n{str(e)}\n\n請稍後再試。"
             )
 
@@ -388,7 +490,7 @@ class TelegramBotHandler:
         try:
             # 步驟 1: 嘗試下載貼文圖片
             logger.info(f"開始處理貼文: {instagram_url}")
-            await processing_message.edit_text("⏳ 下載貼文中...")
+            await self._safe_edit_message(processing_message, "⏳ 下載貼文中...")
             
             post_result = await self.downloader.download_post(instagram_url)
             
@@ -402,7 +504,8 @@ class TelegramBotHandler:
                 await self._save_failed_task(
                     instagram_url, chat_id, ErrorType.DOWNLOAD, post_result.error_message
                 )
-                await processing_message.edit_text(
+                await self._safe_edit_message(
+                    processing_message,
                     f"❌ 下載失敗\n\n{post_result.error_message}\n\n已排入重試佇列。"
                 )
                 return
@@ -422,7 +525,8 @@ class TelegramBotHandler:
             
             try:
                 # 步驟 2: 分析圖片（每張圖片獨立分析）
-                await processing_message.edit_text(
+                await self._safe_edit_message(
+                    processing_message,
                     f"⏳ 分析圖片中... (共 {len(image_paths)} 張)"
                 )
                 
@@ -433,14 +537,14 @@ class TelegramBotHandler:
                     await self._save_failed_task(
                         instagram_url, chat_id, ErrorType.TRANSCRIBE, error_msg
                     )
-                    await processing_message.edit_text(f"❌ 處理失敗\n\n{error_msg}")
+                    await self._safe_edit_message(processing_message, f"❌ 處理失敗\n\n{error_msg}")
                     return
                 
                 visual_description = visual_result.overall_visual_summary
                 logger.info(f"圖片分析完成，共 {len(visual_result.frame_descriptions)} 張")
                 
                 # 步驟 3: 使用 LLM 生成完整 Markdown 筆記
-                await processing_message.edit_text("⏳ 生成筆記中...")
+                await self._safe_edit_message(processing_message, "⏳ 生成筆記中...")
                 
                 note_result = await self.summarizer.generate_post_note(
                     url=instagram_url,
@@ -453,7 +557,8 @@ class TelegramBotHandler:
                     await self._save_failed_task(
                         instagram_url, chat_id, ErrorType.SUMMARIZE, note_result.error_message
                     )
-                    await processing_message.edit_text(
+                    await self._safe_edit_message(
+                        processing_message,
                         f"❌ 筆記生成失敗\n\n{note_result.error_message}\n\n已排入重試佇列。"
                     )
                     return
@@ -479,7 +584,16 @@ class TelegramBotHandler:
                     instagram_url=instagram_url
                 )
                 
-                await processing_message.edit_text(reply_message)
+                await self._safe_edit_message(processing_message, reply_message)
+                
+                # 儲存已處理的 URL
+                await save_processed_url(
+                    url=instagram_url,
+                    url_type="instagram_post",
+                    chat_id=chat_id,
+                    title=post_title,
+                    note_path=None,
+                )
                 logger.info(f"貼文處理完成: {instagram_url}")
                 
             finally:
@@ -487,10 +601,219 @@ class TelegramBotHandler:
                 await self.downloader.cleanup_post_images(image_paths)
         
         except Exception as e:
-            logger.error(f"處理貼文過程發生錯誤: {e}")
-            await processing_message.edit_text(
+            logger.error(f"處理貼文過程發生錯誤: {e}", exc_info=True)
+            await self._safe_edit_message(
+                processing_message,
                 f"❌ 處理過程發生錯誤\n\n{str(e)}\n\n請稍後再試。"
             )
+
+    async def _handle_threads(
+        self,
+        threads_url: str,
+        chat_id: str,
+        processing_message,
+    ) -> None:
+        """處理 Threads 串文（支援圖片和影片）"""
+        media_download_result: ThreadsMediaDownloadResult = None
+
+        try:
+            # 步驟 1: 下載 Threads 貼文內容
+            logger.info(f"開始處理 Threads: {threads_url}")
+            download_result = await self.threads_downloader.download(threads_url)
+
+            if not download_result.success:
+                await self._save_failed_task(
+                    threads_url, chat_id, ErrorType.DOWNLOAD, download_result.error_message
+                )
+                await self._safe_edit_message(
+                    processing_message,
+                    f"❌ 下載失敗\n\n{download_result.error_message}\n\n已排入重試佇列。"
+                )
+                return
+
+            # 取得作者名稱
+            if download_result.content_type == "single_post" and download_result.post:
+                author = download_result.post.author_username
+            elif download_result.conversation:
+                author = download_result.conversation.parent_post.author_username
+            else:
+                author = "unknown"
+
+            # 步驟 2: 格式化文字內容
+            formatted_content = self.threads_downloader.format_for_summary(download_result)
+
+            if not formatted_content:
+                await self._safe_edit_message(processing_message, "❌ 無法取得串文內容")
+                return
+
+            # 步驟 3: 下載並分析媒體（如果有）
+            visual_description = None
+            transcript = None
+
+            all_media = self.threads_downloader.get_all_media(download_result)
+            if all_media:
+                await self._safe_edit_message(
+                    processing_message,
+                    f"⏳ 下載媒體中... ({len(all_media)} 個檔案)"
+                )
+                media_download_result = await self.threads_downloader.download_media(all_media)
+
+                if media_download_result.success:
+                    visual_parts = []
+
+                    # 分析圖片
+                    if media_download_result.image_paths:
+                        await self._safe_edit_message(
+                            processing_message,
+                            f"⏳ 分析圖片中... ({len(media_download_result.image_paths)} 張)"
+                        )
+                        image_result = await self.visual_analyzer.analyze_images(
+                            media_download_result.image_paths
+                        )
+                        if image_result.success and image_result.overall_visual_summary:
+                            visual_parts.append("【圖片內容】\n" + image_result.overall_visual_summary)
+
+                    # 分析影片
+                    if media_download_result.video_paths:
+                        await self._safe_edit_message(
+                            processing_message,
+                            f"⏳ 分析影片中... ({len(media_download_result.video_paths)} 個)"
+                        )
+                        for i, video_path in enumerate(media_download_result.video_paths, 1):
+                            video_result = await self.visual_analyzer.analyze(video_path)
+                            if video_result.success and video_result.overall_visual_summary:
+                                visual_parts.append(
+                                    f"【影片 {i} 內容】\n" + video_result.overall_visual_summary
+                                )
+
+                    # 轉錄音訊（如果有）
+                    if media_download_result.audio_paths:
+                        await self._safe_edit_message(processing_message, "⏳ 轉錄語音中...")
+                        transcripts = []
+                        for audio_path in media_download_result.audio_paths:
+                            trans_result = await self.transcriber.transcribe(audio_path)
+                            if trans_result.success and trans_result.transcript:
+                                transcripts.append(trans_result.transcript)
+                        if transcripts:
+                            transcript = "\n\n".join(transcripts)
+
+                    if visual_parts:
+                        visual_description = "\n\n".join(visual_parts)
+
+            # 步驟 4: 使用 LLM 生成筆記
+            await self._safe_edit_message(processing_message, "⏳ 生成筆記中...")
+
+            note_result = await self.summarizer.generate_threads_note(
+                url=threads_url,
+                author=author,
+                content=formatted_content,
+                visual_description=visual_description,
+                transcript=transcript,
+            )
+
+            if not note_result.success:
+                await self._save_failed_task(
+                    threads_url, chat_id, ErrorType.SUMMARIZE, note_result.error_message
+                )
+                await self._safe_edit_message(
+                    processing_message,
+                    f"❌ 筆記生成失敗\n\n{note_result.error_message}\n\n已排入重試佇列。"
+                )
+                return
+
+            # 步驟 5: 儲存筆記到 Roam
+            roam_result = await self.roam_sync.save_threads_note(
+                author=author,
+                markdown_content=note_result.markdown_content,
+                original_url=threads_url,
+            )
+
+            if not roam_result.success:
+                logger.warning(f"筆記儲存失敗: {roam_result.error_message}")
+                await self._save_failed_task(
+                    threads_url, chat_id, ErrorType.SYNC, roam_result.error_message
+                )
+
+            # 構建回覆訊息
+            has_media = bool(all_media)
+            reply_message = self._format_threads_reply(
+                author=author,
+                summary=note_result.summary,
+                bullet_points=note_result.bullet_points,
+                roam_result=roam_result,
+                threads_url=threads_url,
+                content_type=download_result.content_type,
+                reply_count=len(download_result.conversation.replies) if download_result.conversation else 0,
+                has_media=has_media,
+            )
+
+            await self._safe_edit_message(processing_message, reply_message)
+            
+            # 儲存已處理的 URL
+            await save_processed_url(
+                url=threads_url,
+                url_type="threads",
+                chat_id=chat_id,
+                title=f"@{author}",
+                note_path=None,
+            )
+            logger.info(f"Threads 處理完成: {threads_url}")
+
+        except Exception as e:
+            logger.error(f"處理 Threads 過程發生錯誤: {e}", exc_info=True)
+            await self._safe_edit_message(
+                processing_message,
+                f"❌ 處理過程發生錯誤\n\n{str(e)}\n\n請稍後再試。"
+            )
+
+        finally:
+            # 清理暫存媒體檔案
+            if media_download_result:
+                self.threads_downloader.cleanup_media(media_download_result)
+
+    def _format_threads_reply(
+        self,
+        author: str,
+        summary: str,
+        bullet_points: list,
+        roam_result,
+        threads_url: str,
+        content_type: str = "single_post",
+        reply_count: int = 0,
+        has_media: bool = False,
+    ) -> str:
+        """格式化 Threads 回覆訊息"""
+        # 重點列表
+        bullets_text = "\n".join([f"• {point}" for point in bullet_points])
+
+        # 內容類型說明
+        type_info_parts = []
+        if content_type == "thread_conversation" and reply_count > 0:
+            type_info_parts.append(f"含 {reply_count} 則回覆")
+        if has_media:
+            type_info_parts.append("含媒體")
+        type_info = f"（{'、'.join(type_info_parts)}）" if type_info_parts else ""
+
+        # Roam 連結部分
+        if roam_result.success and roam_result.page_url:
+            roam_section = f"📎 筆記已儲存\n{roam_result.page_url}"
+        else:
+            roam_section = "📎 筆記儲存\n⚠️ 儲存失敗，已排入重試佇列"
+
+        return f"""✅ Threads 筆記生成完成！{type_info}
+
+👤 作者：@{author}
+
+📝 摘要
+{summary}
+
+📌 重點
+{bullets_text}
+
+{roam_section}
+
+🔗 原始連結
+{threads_url}"""
 
     def _format_reply(
         self,
@@ -566,10 +889,40 @@ class TelegramBotHandler:
 🔗 原始連結
 {instagram_url}"""
 
+    async def _error_handler(
+        self, update: object, context: ContextTypes.DEFAULT_TYPE
+    ) -> None:
+        """全域錯誤處理器
+        
+        處理所有未被捕獲的異常，避免 "No error handlers are registered" 警告
+        """
+        logger.error(f"處理更新時發生未預期錯誤: {context.error}", exc_info=context.error)
+        
+        # 嘗試通知使用者（如果可能）
+        if update and hasattr(update, 'effective_chat') and update.effective_chat:
+            try:
+                await context.bot.send_message(
+                    chat_id=update.effective_chat.id,
+                    text="❌ 發生未預期的錯誤，請稍後再試。"
+                )
+            except Exception as e:
+                logger.warning(f"無法發送錯誤通知給使用者: {e}")
+
     def build_application(self) -> Application:
         """建立並設定 Telegram Application"""
+        # 設定更寬裕的網路超時（預設 5 秒太短）
+        request = HTTPXRequest(
+            connect_timeout=20.0,   # 連線超時（20 秒）
+            read_timeout=30.0,      # 讀取超時（30 秒）
+            write_timeout=30.0,     # 寫入超時（30 秒）
+            pool_timeout=10.0,      # 連線池超時（10 秒）
+        )
+        
         self.application = (
-            Application.builder().token(settings.telegram_bot_token).build()
+            Application.builder()
+            .token(settings.telegram_bot_token)
+            .request(request)
+            .build()
         )
 
         # 註冊指令處理器
@@ -580,6 +933,9 @@ class TelegramBotHandler:
         self.application.add_handler(
             MessageHandler(filters.TEXT & ~filters.COMMAND, self.handle_message)
         )
+
+        # 註冊全域錯誤處理器
+        self.application.add_error_handler(self._error_handler)
 
         return self.application
 

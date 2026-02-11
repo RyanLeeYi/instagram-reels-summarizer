@@ -10,6 +10,9 @@ yt-dlp>=2024.12.6
 browser-cookie3>=0.19.1
 instaloader>=4.10
 
+# Threads (Meta) Download
+metathreads>=1.0.0
+
 # Local Whisper (faster-whisper)
 faster-whisper>=1.0.0
 

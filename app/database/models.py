@@ -76,6 +76,23 @@ class FailedTask(Base):
         self.last_retry_at = datetime.utcnow()
 
 
+class ProcessedURL(Base):
+    """已處理 URL 記錄資料表"""
+
+    __tablename__ = "processed_urls"
+
+    id: int = Column(Integer, primary_key=True, autoincrement=True)
+    url: str = Column(Text, nullable=False, unique=True, index=True)
+    url_type: str = Column(String(20), nullable=False)  # instagram_reel, instagram_post, threads
+    title: Optional[str] = Column(Text, nullable=True)
+    telegram_chat_id: str = Column(String(50), nullable=False)
+    note_path: Optional[str] = Column(Text, nullable=True)  # 筆記檔案路徑
+    processed_at: datetime = Column(DateTime, default=datetime.utcnow)
+
+    def __repr__(self) -> str:
+        return f"<ProcessedURL(id={self.id}, url={self.url[:40]}..., type={self.url_type})>"
+
+
 async def init_db() -> None:
     """初始化資料庫，建立所有表格"""
     async with async_engine.begin() as conn:
@@ -86,3 +103,56 @@ async def get_db_session() -> AsyncSession:
     """取得資料庫 Session"""
     async with AsyncSessionLocal() as session:
         yield session
+
+
+# ==================== ProcessedURL 操作函數 ====================
+
+async def check_url_processed(url: str) -> Optional[ProcessedURL]:
+    """檢查 URL 是否已處理過
+    
+    Args:
+        url: 要檢查的 URL
+        
+    Returns:
+        ProcessedURL 物件（如果存在），否則 None
+    """
+    from sqlalchemy import select
+    
+    async with AsyncSessionLocal() as session:
+        result = await session.execute(
+            select(ProcessedURL).where(ProcessedURL.url == url)
+        )
+        return result.scalar_one_or_none()
+
+
+async def save_processed_url(
+    url: str,
+    url_type: str,
+    chat_id: str,
+    title: Optional[str] = None,
+    note_path: Optional[str] = None,
+) -> ProcessedURL:
+    """儲存已處理的 URL
+    
+    Args:
+        url: 已處理的 URL
+        url_type: URL 類型 (instagram_reel, instagram_post, threads)
+        chat_id: Telegram chat ID
+        title: 標題（可選）
+        note_path: 筆記檔案路徑（可選）
+        
+    Returns:
+        新建立的 ProcessedURL 物件
+    """
+    async with AsyncSessionLocal() as session:
+        processed = ProcessedURL(
+            url=url,
+            url_type=url_type,
+            telegram_chat_id=chat_id,
+            title=title,
+            note_path=note_path,
+        )
+        session.add(processed)
+        await session.commit()
+        await session.refresh(processed)
+        return processed
