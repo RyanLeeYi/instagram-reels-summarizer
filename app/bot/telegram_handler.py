@@ -4,9 +4,10 @@ import logging
 import re
 from typing import Optional
 
-from telegram import Update
+from telegram import InlineKeyboardButton, InlineKeyboardMarkup, Update
 from telegram.ext import (
     Application,
+    CallbackQueryHandler,
     CommandHandler,
     MessageHandler,
     ContextTypes,
@@ -26,6 +27,7 @@ from app.services.summarizer_factory import get_summarizer
 from app.services.roam_sync import RoamSyncService
 from app.services.visual_analyzer import VideoVisualAnalyzer
 from app.services.download_logger import DownloadLogger
+from app.services.notebooklm_sync import NotebookLMSyncService, NotebookLMResult
 from app.database.models import (
     FailedTask,
     ErrorType,
@@ -33,6 +35,7 @@ from app.database.models import (
     AsyncSessionLocal,
     check_url_processed,
     save_processed_url,
+    delete_processed_url,
 )
 from telegram.error import TelegramError, TimedOut, NetworkError
 
@@ -61,9 +64,14 @@ class TelegramBotHandler:
         self.roam_sync = RoamSyncService()
         self.visual_analyzer = VideoVisualAnalyzer()
         self.download_logger = DownloadLogger()
+        self.notebooklm_sync: Optional[NotebookLMSyncService] = (
+            NotebookLMSyncService() if settings.notebooklm_enabled else None
+        )
         self.application: Optional[Application] = None
         # 用於防止重複處理同一訊息
         self._processed_message_ids: set[int] = set()
+        # 用於暫存待確認的筆記
+        self._pending_notes: dict = {}
 
     def _is_authorized(self, chat_id: str) -> bool:
         """檢查使用者是否有權限使用 Bot"""
@@ -268,9 +276,17 @@ class TelegramBotHandler:
             existing = await check_url_processed(threads_url)
             if existing:
                 logger.info(f"URL 已處理過: {threads_url}")
+                keyboard = [
+                    [
+                        InlineKeyboardButton("🔄 重新處理", callback_data=f"reprocess:{threads_url}"),
+                        InlineKeyboardButton("⏭ 跳過", callback_data="skip"),
+                    ]
+                ]
                 await update.message.reply_text(
                     f"📝 此連結已於 {existing.processed_at.strftime('%Y-%m-%d %H:%M')} 處理過\n\n"
-                    f"標題：{existing.title or '未知'}"
+                    f"標題：{existing.title or '未知'}\n\n"
+                    f"是否要重新處理？",
+                    reply_markup=InlineKeyboardMarkup(keyboard),
                 )
                 return
             
@@ -304,9 +320,17 @@ class TelegramBotHandler:
         existing = await check_url_processed(instagram_url)
         if existing:
             logger.info(f"URL 已處理過: {instagram_url}")
+            keyboard = [
+                [
+                    InlineKeyboardButton("🔄 重新處理", callback_data=f"reprocess:{instagram_url}"),
+                    InlineKeyboardButton("⏭ 跳過", callback_data="skip"),
+                ]
+            ]
             await update.message.reply_text(
                 f"📝 此連結已於 {existing.processed_at.strftime('%Y-%m-%d %H:%M')} 處理過\n\n"
-                f"標題：{existing.title or '未知'}"
+                f"標題：{existing.title or '未知'}\n\n"
+                f"是否要重新處理？",
+                reply_markup=InlineKeyboardMarkup(keyboard),
             )
             return
 
@@ -433,29 +457,47 @@ class TelegramBotHandler:
                     )
                     return
 
-                # 步驟 4: 儲存 LLM 生成的 Markdown 筆記
+                # 步驟 4: 上傳到 NotebookLM（如果啟用）— 先於 Roam 儲存，以便將連結寫入筆記
+                notebooklm_result = None
+                if self.notebooklm_sync:
+                    try:
+                        await self._safe_edit_message(processing_message, "⏳ 上傳到 NotebookLM...")
+                        notebooklm_result = await self.notebooklm_sync.upload_reel(
+                            markdown_content=note_result.markdown_content,
+                            video_path=video_path,
+                            title=video_title,
+                        )
+                        if not notebooklm_result.success:
+                            logger.warning(f"NotebookLM 上傳失敗: {notebooklm_result.error_message}")
+                    except Exception as e:
+                        logger.warning(f"NotebookLM 上傳過程發生錯誤: {e}")
+
+                # 步驟 5: 儲存 LLM 生成的 Markdown 筆記（包含 NotebookLM 連結）
+                markdown_for_roam = self._inject_nlm_link(
+                    note_result.markdown_content, notebooklm_result
+                )
                 roam_result = await self.roam_sync.save_markdown_note(
                     video_title=video_title,
-                    markdown_content=note_result.markdown_content
+                    markdown_content=markdown_for_roam,
                 )
 
                 if not roam_result.success:
-                    # Roam 同步失敗，但仍然回傳摘要
                     logger.warning(f"筆記儲存失敗: {roam_result.error_message}")
                     await self._save_failed_task(
                         instagram_url, chat_id, ErrorType.SYNC, roam_result.error_message
                     )
 
-                # 構建回覆訊息（使用從筆記中提取的摘要和重點）
+                # 構建回覆訊息
                 reply_message = self._format_reply_simple(
                     summary=note_result.summary,
                     bullet_points=note_result.bullet_points,
                     roam_result=roam_result,
-                    instagram_url=instagram_url
+                    instagram_url=instagram_url,
+                    notebooklm_result=notebooklm_result,
                 )
 
                 await self._safe_edit_message(processing_message, reply_message)
-                
+
                 # 儲存已處理的 URL
                 await save_processed_url(
                     url=instagram_url,
@@ -563,10 +605,28 @@ class TelegramBotHandler:
                     )
                     return
                 
-                # 步驟 4: 儲存 LLM 生成的 Markdown 筆記（包含原始貼文文字）
+                # 步驟 4: 上傳到 NotebookLM（如果啟用）— 先於 Roam 儲存，以便將連結寫入筆記
+                notebooklm_result = None
+                if self.notebooklm_sync:
+                    try:
+                        await self._safe_edit_message(processing_message, "⏳ 上傳到 NotebookLM...")
+                        notebooklm_result = await self.notebooklm_sync.upload_post(
+                            markdown_content=note_result.markdown_content,
+                            image_paths=image_paths,
+                            title=post_title,
+                        )
+                        if not notebooklm_result.success:
+                            logger.warning(f"NotebookLM 上傳失敗: {notebooklm_result.error_message}")
+                    except Exception as e:
+                        logger.warning(f"NotebookLM 上傳過程發生錯誤: {e}")
+                
+                # 步驟 5: 儲存 LLM 生成的 Markdown 筆記（包含 NotebookLM 連結 + 原始貼文文字）
+                markdown_for_roam = self._inject_nlm_link(
+                    note_result.markdown_content, notebooklm_result
+                )
                 roam_result = await self.roam_sync.save_post_note(
                     post_title=post_title,
-                    markdown_content=note_result.markdown_content,
+                    markdown_content=markdown_for_roam,
                     caption=caption,
                 )
                 
@@ -581,7 +641,8 @@ class TelegramBotHandler:
                     summary=note_result.summary,
                     bullet_points=note_result.bullet_points,
                     roam_result=roam_result,
-                    instagram_url=instagram_url
+                    instagram_url=instagram_url,
+                    notebooklm_result=notebooklm_result,
                 )
                 
                 await self._safe_edit_message(processing_message, reply_message)
@@ -721,10 +782,33 @@ class TelegramBotHandler:
                 )
                 return
 
-            # 步驟 5: 儲存筆記到 Roam
+            # 步驟 5: 上傳到 NotebookLM（如果啟用）— 先於 Roam 儲存，以便將連結寫入筆記
+            notebooklm_result = None
+            if self.notebooklm_sync:
+                try:
+                    await self._safe_edit_message(processing_message, "⏳ 上傳到 NotebookLM...")
+                    # 收集所有媒體路徑
+                    media_paths = []
+                    if media_download_result:
+                        media_paths.extend(media_download_result.image_paths or [])
+                        media_paths.extend(media_download_result.video_paths or [])
+                    notebooklm_result = await self.notebooklm_sync.upload_threads(
+                        markdown_content=note_result.markdown_content,
+                        media_paths=media_paths if media_paths else None,
+                        title=f"@{author}",
+                    )
+                    if not notebooklm_result.success:
+                        logger.warning(f"NotebookLM 上傳失敗: {notebooklm_result.error_message}")
+                except Exception as e:
+                    logger.warning(f"NotebookLM 上傳過程發生錯誤: {e}")
+
+            # 步驟 6: 儲存筆記到 Roam（包含 NotebookLM 連結）
+            markdown_for_roam = self._inject_nlm_link(
+                note_result.markdown_content, notebooklm_result
+            )
             roam_result = await self.roam_sync.save_threads_note(
                 author=author,
-                markdown_content=note_result.markdown_content,
+                markdown_content=markdown_for_roam,
                 original_url=threads_url,
             )
 
@@ -745,6 +829,7 @@ class TelegramBotHandler:
                 content_type=download_result.content_type,
                 reply_count=len(download_result.conversation.replies) if download_result.conversation else 0,
                 has_media=has_media,
+                notebooklm_result=notebooklm_result,
             )
 
             await self._safe_edit_message(processing_message, reply_message)
@@ -781,6 +866,7 @@ class TelegramBotHandler:
         content_type: str = "single_post",
         reply_count: int = 0,
         has_media: bool = False,
+        notebooklm_result=None,
     ) -> str:
         """格式化 Threads 回覆訊息"""
         # 重點列表
@@ -795,10 +881,15 @@ class TelegramBotHandler:
         type_info = f"（{'、'.join(type_info_parts)}）" if type_info_parts else ""
 
         # Roam 連結部分
-        if roam_result.success and roam_result.page_url:
+        if roam_result and roam_result.success and roam_result.page_url:
             roam_section = f"📎 筆記已儲存\n{roam_result.page_url}"
         else:
             roam_section = "📎 筆記儲存\n⚠️ 儲存失敗，已排入重試佇列"
+
+        # NotebookLM 連結部分
+        nlm_section = ""
+        if notebooklm_result and notebooklm_result.success and notebooklm_result.notebook_url:
+            nlm_section = f"\n🤖 NotebookLM\n{notebooklm_result.notebook_url}\n"
 
         return f"""✅ Threads 筆記生成完成！{type_info}
 
@@ -811,7 +902,7 @@ class TelegramBotHandler:
 {bullets_text}
 
 {roam_section}
-
+{nlm_section}
 🔗 原始連結
 {threads_url}"""
 
@@ -841,7 +932,7 @@ class TelegramBotHandler:
             visual_section = f"\n👁 畫面觀察\n{visual_text}\n"
 
         # Roam 連結部分
-        if roam_result.success and roam_result.page_url:
+        if roam_result and roam_result.success and roam_result.page_url:
             roam_section = f"📎 Roam Research\n{roam_result.page_url}"
         else:
             roam_section = "📎 Roam Research\n⚠️ 同步失敗，已排入重試佇列"
@@ -859,22 +950,66 @@ class TelegramBotHandler:
 🔗 原始連結
 {instagram_url}"""
 
+    @staticmethod
+    def _inject_nlm_link(
+        markdown_content: str,
+        notebooklm_result,
+    ) -> str:
+        """
+        將 NotebookLM 連結注入到 Markdown 內容中
+
+        在「來源資訊」區塊後插入，確保內容儲存到 Roam 時包含 NLM 連結。
+
+        Args:
+            markdown_content: 原始 Markdown 內容
+            notebooklm_result: NotebookLMResult 物件
+
+        Returns:
+            含有 NLM 連結的 Markdown 內容（若上傳失敗則回傳原始內容）
+        """
+        if (
+            not notebooklm_result
+            or not notebooklm_result.success
+            or not notebooklm_result.notebook_url
+        ):
+            return markdown_content
+
+        nlm_link = f"\n- 🤖 **NotebookLM**: [{notebooklm_result.notebook_url}]({notebooklm_result.notebook_url})"
+
+        # 嘗試在「來源資訊」區塊後插入
+        pattern = r"(## 來源資訊.*?)(\n\n)"
+        match = re.search(pattern, markdown_content, re.DOTALL)
+        if match:
+            insert_pos = match.end(1)
+            return markdown_content[:insert_pos] + nlm_link + markdown_content[insert_pos:]
+
+        # 備用：在文件末尾加上
+        return markdown_content + f"\n\n## NotebookLM\n\n- 🤖 [{notebooklm_result.notebook_url}]({notebooklm_result.notebook_url})\n"
+
     def _format_reply_simple(
         self,
         summary: str,
         bullet_points: list,
         roam_result,
         instagram_url: str,
+        notebooklm_result=None,
     ) -> str:
         """格式化簡潔版回覆訊息（用於 LLM 生成筆記模式）"""
         # 重點列表
         bullets_text = "\n".join([f"• {point}" for point in bullet_points])
 
         # Roam 連結部分
-        if roam_result.success and roam_result.page_url:
+        if roam_result and roam_result.success and roam_result.page_url:
             roam_section = f"📎 筆記已儲存\n{roam_result.page_url}"
+        elif roam_result is None:
+            roam_section = "📎 筆記尚未儲存（等待確認）"
         else:
             roam_section = "📎 筆記儲存\n⚠️ 儲存失敗，已排入重試佇列"
+
+        # NotebookLM 連結部分
+        nlm_section = ""
+        if notebooklm_result and notebooklm_result.success and notebooklm_result.notebook_url:
+            nlm_section = f"\n🤖 NotebookLM\n{notebooklm_result.notebook_url}\n"
 
         return f"""✅ 筆記生成完成！
 
@@ -885,7 +1020,7 @@ class TelegramBotHandler:
 {bullets_text}
 
 {roam_section}
-
+{nlm_section}
 🔗 原始連結
 {instagram_url}"""
 
@@ -907,6 +1042,102 @@ class TelegramBotHandler:
                 )
             except Exception as e:
                 logger.warning(f"無法發送錯誤通知給使用者: {e}")
+
+    async def _send_review_message(
+        self, processing_message, reply_message: str, callback_id: str
+    ) -> None:
+        """發送帶確認/篩除按鈕的筆記預覽訊息"""
+        keyboard = [
+            [
+                InlineKeyboardButton("✅ 儲存筆記", callback_data=f"save:{callback_id}"),
+                InlineKeyboardButton("🗑 篩除", callback_data=f"discard:{callback_id}"),
+            ]
+        ]
+        await self._safe_edit_message(processing_message, reply_message)
+        # edit_text 不支援 reply_markup，需要用 edit_reply_markup
+        try:
+            await processing_message.edit_reply_markup(
+                reply_markup=InlineKeyboardMarkup(keyboard)
+            )
+        except Exception as e:
+            logger.warning(f"無法新增按鈕: {e}")
+
+    async def handle_callback_query(
+        self, update: Update, context: ContextTypes.DEFAULT_TYPE
+    ) -> None:
+        """處理 inline keyboard 按鈕回調"""
+        query = update.callback_query
+        await query.answer()  # 回應按鈕點擊（移除載入動畫）
+
+        data = query.data
+
+        if data == "skip":
+            await query.edit_message_text("⏭ 已跳過，不重新處理。")
+            return
+
+        if data.startswith("save:"):
+            callback_id = data[len("save:"):]
+            pending = self._pending_notes.pop(callback_id, None)
+            if not pending:
+                await query.edit_message_text("⚠️ 筆記已過期或已處理過。")
+                return
+            await query.edit_message_text("⏳ 正在儲存筆記...")
+            try:
+                save_func = pending["save_func"]
+                roam_result = await save_func()
+                # 儲存已處理 URL
+                await save_processed_url(
+                    url=pending["url"],
+                    url_type=pending["url_type"],
+                    chat_id=pending["chat_id"],
+                    title=pending["title"],
+                    note_path=None,
+                )
+                if roam_result.success:
+                    final_text = pending["reply_text"].replace(
+                        "📎 筆記尚未儲存（等待確認）",
+                        f"📎 筆記已儲存\n{roam_result.page_url or ''}"
+                    )
+                    await query.edit_message_text(final_text)
+                else:
+                    final_text = pending["reply_text"].replace(
+                        "📎 筆記尚未儲存（等待確認）",
+                        "📎 筆記儲存\n⚠️ 儲存失敗，已排入重試佇列"
+                    )
+                    await query.edit_message_text(final_text)
+            except Exception as e:
+                logger.error(f"儲存筆記失敗: {e}")
+                await query.edit_message_text(f"❌ 儲存失敗: {e}")
+            return
+
+        if data.startswith("discard:"):
+            callback_id = data[len("discard:"):]
+            self._pending_notes.pop(callback_id, None)
+            await query.edit_message_text("🗑 已篩除，不儲存筆記。")
+            return
+
+        if data.startswith("reprocess:"):
+            url = data[len("reprocess:"):]
+            chat_id = str(update.effective_chat.id)
+
+            # 先刪除舊的處理紀錄
+            deleted = await delete_processed_url(url)
+            if deleted:
+                logger.info(f"已刪除舊紀錄: {url}")
+
+            # 更新按鈕訊息為處理中
+            await query.edit_message_text("⏳ 重新處理中，請稍候...")
+            # 用 edit 後的訊息作為 processing_message
+            processing_message = query.message
+
+            # 判斷 URL 類型並分發處理
+            if self.THREADS_URL_PATTERN.search(url):
+                await self._handle_threads(url, chat_id, processing_message)
+            elif self._is_reel_url(url):
+                await self._handle_reel(url, chat_id, processing_message)
+            else:
+                await self._handle_post(url, chat_id, processing_message)
+            return
 
     def build_application(self) -> Application:
         """建立並設定 Telegram Application"""
@@ -933,6 +1164,9 @@ class TelegramBotHandler:
         self.application.add_handler(
             MessageHandler(filters.TEXT & ~filters.COMMAND, self.handle_message)
         )
+
+        # 註冊 inline keyboard 回調處理器
+        self.application.add_handler(CallbackQueryHandler(self.handle_callback_query))
 
         # 註冊全域錯誤處理器
         self.application.add_error_handler(self._error_handler)

@@ -5,7 +5,7 @@
 [![Ollama](https://img.shields.io/badge/Ollama-Local%20AI-orange.svg)](https://ollama.com/)
 [![License](https://img.shields.io/badge/License-Personal%20Use-lightgrey.svg)](#授權)
 
-> 透過 Telegram Bot 接收 Instagram Reels 連結，自動下載影片、轉錄語音、生成摘要，並同步至 Roam Research。完全免費，使用本地 AI 模型，無需任何 API Key。
+> 透過 Telegram Bot 接收 Instagram Reels / 圖文貼文 / Threads 連結，自動下載影片與圖片、轉錄語音、生成摘要，並同步至 Roam Research 與 NotebookLM。完全免費，使用本地 AI 模型，無需任何 API Key。
 
 ---
 
@@ -33,12 +33,15 @@
 
 | 功能 | 說明 | 技術 |
 |------|------|------|
-| 📱 **Telegram Bot 整合** | 直接分享 Instagram Reels 連結即可處理 | python-telegram-bot |
-| 🎬 **自動下載** | 下載 Instagram Reels 影片 | yt-dlp + cookies.txt |
+| 📱 **Telegram Bot 整合** | 直接分享連結即可處理 | python-telegram-bot |
+| 🎬 **Instagram Reels 下載** | 下載 Reels 影片並轉錄 | yt-dlp + cookies.txt |
+| 🖼️ **Instagram 圖文貼文** | 下載多圖 Carousel 貼文 | Instaloader |
+| 🧵 **Threads 支援** | 下載 Threads 貼文（含回覆串） | Threads API |
 | 🎤 **語音轉錄** | 本地語音轉文字（免費、無需 API Key） | faster-whisper |
 | 👁️ **視覺分析** | 分析影片畫面（動態 8-10 幀、並行處理） | Gemma3 / MiniCPM-V |
 | 📝 **AI 摘要** | 整合語音與畫面生成繁體中文摘要 | Ollama / Claude CLI / Copilot CLI |
 | 📚 **Roam Research 同步** | 本地備份 + 可選自動同步至 Roam | Claude Code + Roam MCP |
+| 🤖 **NotebookLM 同步** | 自動上傳摘要與媒體到 NotebookLM | Playwright + Chrome CDP |
 | 🔄 **失敗重試** | 自動重試失敗的任務（最多 3 次） | APScheduler |
 | ⚡ **並行處理** | 幀分析支援並行加速 | asyncio |
 | 🔒 **URL 重複檢查** | 避免重複處理同一連結，提示已處理過 | SQLite |
@@ -67,6 +70,18 @@
 
 > 詳細設定請參考 [安裝步驟 - 設定 Claude Code MCP](#安裝步驟)
 
+### 🤖 NotebookLM 自動同步（可選）
+
+透過 Chrome CDP 連線 + Playwright 自動化，將摘要與媒體上傳到 Google NotebookLM：
+
+- 每日自動建立 Notebook（以日期命名）
+- 摘要文字以「複製的文字」方式上傳為 source
+- 影片 / 圖片批次上傳為檔案 source（一次多選）
+- 使用獨立 Chrome Profile，不干擾日常瀏覽器
+- 自動偵測 Notebook 是否被刪除並重新建立
+
+> 詳細設定請參考 [安裝步驟 - 設定 NotebookLM 同步](#安裝步驟)
+
 ---
 
 ## 技術堆疊
@@ -84,6 +99,7 @@
 | **非同步資料庫** | aiosqlite | 0.19+ |
 | **任務排程** | APScheduler | 3.10+ |
 | **HTTP 客戶端** | httpx | 0.25+ |
+| **瀏覽器自動化** | Playwright | 1.40+ |
 | **設定管理** | pydantic-settings | 2.2+ |
 | **反向代理** | Cloudflare Tunnel | Latest |
 
@@ -98,9 +114,9 @@
 │                                                                  │
 │  ┌───────────┐    ┌───────────┐    ┌─────────────┐              │
 │  │ Telegram  │───▶│  下載器   │───▶│faster-whisper│              │
-│  │  Bot API  │    │ (yt-dlp)  │    │  本地轉錄   │              │
-│  └───────────┘    └───────────┘    └─────────────┘              │
-│        │                                 │                       │
+│  │  Bot API  │    │ yt-dlp /  │    │  本地轉錄   │              │
+│  └───────────┘    │Instaloader│    └─────────────┘              │
+│        │          └───────────┘           │                      │
 │        │                         ┌───────┴───────┐               │
 │        │                         ▼               ▼               │
 │        │                 ┌─────────────┐ ┌─────────────┐        │
@@ -112,8 +128,13 @@
 │  ┌───────────┐                         ┌─────────────┐          │
 │  │ 回覆訊息  │◀────────────────────────│  Markdown   │          │
 │  └───────────┘                         │  本地儲存   │          │
-│                                        └─────────────┘          │
-│                                                                  │
+│        │                               └──────┬──────┘          │
+│        │                                      │                  │
+│        │         ┌─────────────┐  ┌───────────┴───┐             │
+│        │         │ NotebookLM  │  │ Roam Research │             │
+│        │         │ (Chrome CDP)│  │ (Claude MCP)  │             │
+│        │         └─────────────┘  └───────────────┘             │
+│        │                                                         │
 │  ┌───────────┐    ┌───────────┐                                 │
 │  │ 失敗記錄  │◀───│  排程器   │                                 │
 │  │ (SQLite)  │───▶│ (每小時)  │                                 │
@@ -141,6 +162,7 @@
 | **Cloudflare Tunnel** | 用於 Telegram Webhook |
 | **RAM** | 建議 8GB 以上 |
 | **GPU（可選）** | NVIDIA GPU 可加速轉錄 |
+| **Google Chrome** | NotebookLM 同步需要（可選） |
 
 ---
 
@@ -280,6 +302,16 @@ WEBHOOK_URL=https://your-tunnel-url.trycloudflare.com
 
 # Claude Code 同步（可選）
 CLAUDE_CODE_SYNC_ENABLED=false
+
+# NotebookLM 自動同步（可選）
+NOTEBOOKLM_ENABLED=false
+NOTEBOOKLM_CDP_URL=http://localhost:9222
+NOTEBOOKLM_UPLOAD_VIDEO=true
+
+# Threads 設定（可選）
+THREADS_ENABLED=true
+THREADS_FETCH_REPLIES=true
+THREADS_MAX_REPLIES=50
 ```
 
 </details>
@@ -345,7 +377,58 @@ ROAM_GRAPH_NAME=your_graph_name
 </details>
 
 <details>
-<summary><strong>7. 設定 Instagram Cookies</strong></summary>
+<summary><strong>7. 設定 NotebookLM 自動同步（可選）</strong></summary>
+
+此功能透過 Chrome CDP + Playwright 自動化，將摘要與媒體上傳到 Google NotebookLM。
+
+**前置需求：**
+
+1. 安裝 Google Chrome
+2. 安裝 Playwright：`pip install playwright && playwright install chromium`
+
+**啟用方式：**
+
+在 `.env` 中設定：
+
+```env
+NOTEBOOKLM_ENABLED=true
+NOTEBOOKLM_CDP_URL=http://localhost:9222
+NOTEBOOKLM_UPLOAD_VIDEO=true
+```
+
+**首次使用：**
+
+1. 執行 `scripts\start_chrome_cdp.bat` 啟動 CDP Chrome（使用獨立 Profile）
+2. 在開啟的 Chrome 視窗中登入 Google 帳號
+3. 後續啟動會自動記住登入狀態
+
+**運作方式：**
+
+```
+1. 摘要生成完成
+       │
+       ▼
+2. 透過 CDP 連接到 Chrome
+       │
+       ▼
+3. 建立或開啟當日 Notebook
+       │
+       ▼
+4. 上傳摘要文字（作為 source）
+       │
+       ▼
+5. 批次上傳影片 / 圖片（一次多選）
+       │
+       ▼
+6. NotebookLM URL 回寫至 Roam 筆記
+```
+
+> 💡 **提示**：使用 `start.ps1` 一鍵啟動時，會自動啟動 Chrome CDP。
+
+</details>
+
+<details>
+<summary><strong>8. 設定 Instagram Cookies</strong></summary>
 
 為了下載 Instagram Reels，需要提供登入後的 cookies：
 
@@ -360,7 +443,7 @@ ROAM_GRAPH_NAME=your_graph_name
 </details>
 
 <details>
-<summary><strong>8. 取得 Telegram Chat ID</strong></summary>
+<summary><strong>9. 取得 Telegram Chat ID</strong></summary>
 
 1. 啟動 Bot 後，發送任意訊息給 Bot
 2. 查看伺服器日誌，會顯示您的 Chat ID
@@ -417,8 +500,10 @@ curl -X POST "http://localhost:8000/webhook/setup?webhook_url=https://your-tunne
 
 ## 使用方式
 
+### Instagram Reels / 圖文貼文
+
 ```
-1. 📱 在 Instagram App 找到想要摘要的 Reels
+1. 📱 在 Instagram App 找到想要摘要的 Reels 或圖文貼文
          │
          ▼
 2. 📤 點擊「分享」按鈕
@@ -433,8 +518,24 @@ curl -X POST "http://localhost:8000/webhook/setup?webhook_url=https://your-tunne
 5. ✅ 處理完成，Bot 回覆：
       • 📝 摘要段落
       • 📌 條列式重點
-      • 👁️ 畫面觀察
+      • 👁️ 畫面觀察（Reels）/ 📸 圖片分析（貼文）
       • 📎 Roam Research 頁面連結
+      • 🤖 NotebookLM 連結（如啟用）
+```
+
+### Threads 貼文
+
+```
+1. 🧵 在 Threads App 找到想要摘要的貼文
+         │
+         ▼
+2. 📤 複製連結，發送給 Telegram Bot
+         │
+         ▼
+3. ⏳ Bot 自動下載文字、圖片、回覆串
+         │
+         ▼
+4. ✅ 處理完成，Bot 回覆完整摘要
 ```
 
 ### 輸出範例
@@ -486,13 +587,18 @@ instagram-reels-summarizer/
 │   ├── 📁 bot/
 │   │   └── telegram_handler.py  # Telegram Bot 訊息處理
 │   ├── 📁 services/
-│   │   ├── downloader.py        # Instagram 影片下載 (yt-dlp)
+│   │   ├── downloader.py        # Instagram 下載 (yt-dlp + Instaloader)
+│   │   ├── threads_downloader.py # Threads 貼文下載
 │   │   ├── download_logger.py   # 下載記錄（大小與連結）
 │   │   ├── transcriber.py       # 語音轉錄 (faster-whisper)
 │   │   ├── visual_analyzer.py   # 視覺分析 (Ollama + Vision Model)
 │   │   ├── summarizer.py        # AI 摘要生成 (Ollama + LLM)
+│   │   ├── summarizer_factory.py # 摘要服務工廠
+│   │   ├── claude_summarizer.py # Claude Code CLI 摘要
+│   │   ├── copilot_summarizer.py # GitHub Copilot CLI 摘要
 │   │   ├── prompt_loader.py     # Prompt 模板載入器
-│   │   └── roam_sync.py         # Roam Research 本地同步
+│   │   ├── roam_sync.py         # Roam Research 本地同步
+│   │   └── notebooklm_sync.py   # NotebookLM 自動上傳 (Chrome CDP)
 │   ├── 📁 prompts/              # AI Prompt 模板
 │   │   ├── 📁 examples/         # 範例筆記（供 AI 參考）
 │   │   │   ├── 📁 audio/        # 有語音的影片範例
@@ -505,12 +611,20 @@ instagram-reels-summarizer/
 │       └── models.py            # SQLite 模型（FailedJob + ProcessedURL）
 ├── 📁 scripts/                  # 手動測試腳本
 │   ├── README.md                # 腳本使用說明
+│   ├── start_chrome_cdp.bat     # 啟動 Chrome CDP（NotebookLM 用）
 │   ├── test_download.py         # 下載功能測試
 │   ├── test_transcribe.py       # 轉錄功能測試
 │   ├── test_summarize.py        # 摘要功能測試
 │   ├── test_visual.py           # 視覺分析測試
 │   ├── test_flow.py             # 完整流程測試（不含視覺）
-│   └── test_flow_visual.py      # 完整流程測試（含視覺）
+│   ├── test_flow_visual.py      # 完整流程測試（含視覺）
+│   ├── test_post.py             # Instagram 貼文下載測試
+│   ├── test_post_upload.py      # 貼文下載 + NotebookLM 上傳測試
+│   ├── test_notebooklm.py       # NotebookLM 上傳測試
+│   ├── test_notebooklm_file.py  # NotebookLM 檔案上傳測試
+│   ├── test_claude_summarize.py # Claude 摘要測試
+│   ├── test_copilot_summarize.py # Copilot 摘要測試
+│   └── cleanup_notebooklm.py   # NotebookLM Notebook 清理
 ├── 📁 tests/                    # pytest 單元測試
 │   ├── test_downloader.py       # 下載模組測試
 │   └── test_summarizer.py       # 摘要模組測試
@@ -582,6 +696,18 @@ instagram-reels-summarizer/
 - Ollama 服務未啟動 → 執行 `ollama serve`
 - 模型未下載 → 執行 `ollama pull qwen3:8b` 和 `ollama pull gemma3:4b`
 - 記憶體不足 → 嘗試使用較小的模型
+
+</details>
+
+<details>
+<summary><strong>❌ NotebookLM 上傳失敗</strong></summary>
+
+**可能原因與解決方案：**
+- Chrome CDP 未啟動 → 執行 `scripts\start_chrome_cdp.bat` 或使用 `start.ps1`
+- Google 未登入 → 在 CDP Chrome 視窗中登入 Google 帳號
+- Notebook 被刪除 → 系統會自動偵測並重新建立
+- CDK Overlay 遮擋按鈕 → 系統已自動處理（使用 JS click 繞過）
+- 頁面跳轉導致上傳中斷 → 系統已自動偵測並導航回 Notebook
 
 </details>
 
@@ -708,8 +834,9 @@ python scripts/test_flow_visual.py   # 完整流程測試
 
 ### 測試覆蓋範圍
 
-- **test_downloader.py** - Instagram 影片下載測試
+- **test_downloader.py** - Instagram 影片 / 貼文下載測試
 - **test_summarizer.py** - AI 摘要生成測試
+- **test_notebooklm.py** - NotebookLM 上傳測試
 
 ---
 
@@ -765,6 +892,8 @@ python scripts/test_flow_visual.py   # 完整流程測試
 - faster-whisper 對於背景音樂較大的影片，轉錄品質可能較差
 - 本地 LLM 摘要品質取決於模型大小
 - 首次執行需下載模型，需要額外時間
+- NotebookLM 同步需要保持 Chrome CDP 視窗開啟
+- NotebookLM 介面可能更新導致選擇器失效，需適時調整
 
 ---
 
@@ -775,6 +904,7 @@ python scripts/test_flow_visual.py   # 完整流程測試
 - 支援多語言摘要輸出
 - 建立 Web Dashboard 查看處理歷史
 - 支援 GPU 加速提升處理速度
+- NotebookLM Audio Overview 自動生成
 
 ---
 
@@ -782,6 +912,9 @@ python scripts/test_flow_visual.py   # 完整流程測試
 
 | 日期 | 版本 | 更新內容 |
 |------|------|---------|
+| 2026-02-17 | v1.6.0 | NotebookLM 多圖批次上傳（一次多選）、頁面跳轉修復 |
+| 2026-02-16 | v1.5.0 | NotebookLM 改用 Chrome CDP 連線、獨立 Profile、Notebook 自動偵測 |
+| 2026-02-10 | v1.4.0 | 新增 Instagram 圖文貼文支援、Threads 貼文支援、NotebookLM 同步 |
 | 2026-02-03 | v1.3.0 | 更新預設模型為 Qwen3:8b 和 Gemma3:4b |
 | 2026-01-22 | v1.2.0 | 新增 Claude Code MCP 同步、並行幀分析、動態幀數 |
 | 2026-01-21 | v1.1.0 | 新增 MiniCPM-V 視覺分析功能 |

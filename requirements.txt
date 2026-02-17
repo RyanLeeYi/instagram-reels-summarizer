@@ -40,6 +40,9 @@ aiofiles>=23.2.1
 # Environment Variables
 python-dotenv>=1.0.0
 
+# Browser Automation (NotebookLM)
+playwright>=1.40.0
+
 # Utilities
 pydantic>=2.8.0
 pydantic-settings>=2.2.0

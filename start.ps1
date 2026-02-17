@@ -11,7 +11,7 @@ Write-Host ""
 Set-Location $PSScriptRoot
 
 # Check if Ollama is running
-Write-Host "[1/4] Checking Ollama..." -ForegroundColor Yellow
+Write-Host "[1/5] Checking Ollama..." -ForegroundColor Yellow
 $ollamaProcess = Get-Process -Name "ollama" -ErrorAction SilentlyContinue
 if (-not $ollamaProcess) {
     Write-Host "      Starting Ollama..." -ForegroundColor Gray
@@ -21,7 +21,7 @@ if (-not $ollamaProcess) {
 Write-Host "      Ollama OK" -ForegroundColor Green
 
 # Pre-warm Roam Research MCP server (optional, for Claude Code integration)
-Write-Host "[2/4] Pre-warming MCP server..." -ForegroundColor Yellow
+Write-Host "[2/5] Pre-warming MCP server..." -ForegroundColor Yellow
 $mcpLogFile = "$env:TEMP\roam-mcp.log"
 $existingMcp = Get-Process -Name "node" -ErrorAction SilentlyContinue | Where-Object {
     try {
@@ -60,7 +60,7 @@ if ($existingMcp) {
 }
 
 # Check virtual environment
-Write-Host "[3/4] Checking venv..." -ForegroundColor Yellow
+Write-Host "[3/5] Checking venv..." -ForegroundColor Yellow
 if (-not (Test-Path ".\.venv\Scripts\python.exe")) {
     Write-Host "      Error: Virtual environment not found!" -ForegroundColor Red
     Write-Host "      Run: python -m venv .venv" -ForegroundColor Red
@@ -69,8 +69,67 @@ if (-not (Test-Path ".\.venv\Scripts\python.exe")) {
 }
 Write-Host "      Venv OK" -ForegroundColor Green
 
+# Start Chrome CDP for NotebookLM automation
+Write-Host "[4/5] Starting Chrome CDP..." -ForegroundColor Yellow
+$envContent = Get-Content ".\.env" -ErrorAction SilentlyContinue
+$nlmEnabled = ($envContent | Where-Object { $_ -match "^NOTEBOOKLM_ENABLED\s*=\s*true" }) -ne $null
+
+if ($nlmEnabled) {
+    # Check if Chrome CDP is already running on port 9222
+    $cdpPort = 9222
+    $cdpRunning = $false
+    try {
+        $response = Invoke-RestMethod -Uri "http://localhost:$cdpPort/json/version" -TimeoutSec 2 -ErrorAction Stop
+        $cdpRunning = $true
+    } catch {
+        $cdpRunning = $false
+    }
+
+    if ($cdpRunning) {
+        Write-Host "      Chrome CDP already running on port $cdpPort" -ForegroundColor Green
+    } else {
+        # Find Chrome executable
+        $chromePath = $null
+        $chromePaths = @(
+            "C:\Program Files\Google\Chrome\Application\chrome.exe",
+            "C:\Program Files (x86)\Google\Chrome\Application\chrome.exe",
+            "$env:LOCALAPPDATA\Google\Chrome\Application\chrome.exe"
+        )
+        foreach ($p in $chromePaths) {
+            if (Test-Path $p) { $chromePath = $p; break }
+        }
+
+        if ($chromePath) {
+            $chromeProfile = "$env:USERPROFILE\.chrome-cdp-notebooklm"
+            Write-Host "      Starting Chrome with CDP on port $cdpPort..." -ForegroundColor Gray
+            Write-Host "      Profile: $chromeProfile" -ForegroundColor Gray
+            Write-Host "      First time: Please login to Google in this Chrome window" -ForegroundColor Gray
+            Start-Process -FilePath $chromePath -ArgumentList @(
+                "--remote-debugging-port=$cdpPort",
+                "--user-data-dir=`"$chromeProfile`"",
+                "--no-first-run",
+                "--no-default-browser-check",
+                "https://notebooklm.google.com"
+            )
+            Start-Sleep -Seconds 3
+
+            # Verify CDP is up
+            try {
+                $response = Invoke-RestMethod -Uri "http://localhost:$cdpPort/json/version" -TimeoutSec 5 -ErrorAction Stop
+                Write-Host "      Chrome CDP OK (port $cdpPort)" -ForegroundColor Green
+            } catch {
+                Write-Host "      Chrome CDP may not be ready, will retry at upload time" -ForegroundColor Yellow
+            }
+        } else {
+            Write-Host "      Chrome not found, NotebookLM upload will be skipped" -ForegroundColor Yellow
+        }
+    }
+} else {
+    Write-Host "      NotebookLM disabled, skipping" -ForegroundColor Gray
+}
+
 # Start service
-Write-Host "[4/4] Starting FastAPI..." -ForegroundColor Yellow
+Write-Host "[5/5] Starting FastAPI..." -ForegroundColor Yellow
 Write-Host ""
 Write-Host "========================================" -ForegroundColor Green
 Write-Host "  Running at http://localhost:8000" -ForegroundColor Green

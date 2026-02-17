@@ -41,14 +41,18 @@ class NoteResult:
 class CopilotCLISummarizer:
     """使用 GitHub Copilot CLI 的摘要生成服務"""
 
-    SYSTEM_PROMPT = """你是一個專業的內容摘要助手。收到影片逐字稿後，請直接輸出摘要結果，不要詢問使用者，不要使用任何工具。
+    SYSTEM_PROMPT = """你是一個專業的內容摘要助手。收到影片逐字稿後，請直接以純文字輸出摘要結果。
 
-規則：
+【最重要規則】
+- 不要建立檔案、不要使用任何工具
+- 不要詢問使用者
+- 直接輸出結果文字
+
+其他規則：
 1. 摘要以繁體中文撰寫，約 100-200 字
 2. 條列重點 3-5 個要點
 3. 保持客觀，不加個人意見
-4. 特別注意工具名稱、技術術語
-5. 直接輸出結果，不要問問題"""
+4. 特別注意工具名稱、技術術語"""
 
     USER_PROMPT_TEMPLATE = """以下是影片逐字稿，請直接生成摘要（不要問問題，直接輸出結果）：
 
@@ -89,15 +93,23 @@ class CopilotCLISummarizer:
 【畫面觀察】
 • （重要視覺資訊，1-3 點）"""
 
-    NOTE_SYSTEM_PROMPT = """你是筆記整理助手。收到影片資訊後，直接輸出 Markdown 筆記，不要詢問使用者，不要使用工具。
+    NOTE_SYSTEM_PROMPT = """你是筆記整理助手。收到影片資訊後，直接以純文字輸出 Markdown 筆記。
 
-規則：
+【最重要規則】
+- 絕對不要建立檔案、不要使用任何工具（如 create_file、write_file 等）
+- 絕對不要使用任何檔案系統操作
+- 只需要回傳 Markdown 文字，不要有其他動作
+- 不要詢問使用者任何問題
+
+其他規則：
 1. 全部使用繁體中文（台灣用語）
 2. 使用 ## 二級標題分隔區塊
 3. 列表使用 - 符號
-4. 直接輸出 Markdown，不要加說明"""
+4. 直接輸出 Markdown 文字，不要加說明"""
 
-    NOTE_PROMPT_TEMPLATE = """根據以下影片資訊，直接輸出 Markdown 筆記（不要問問題）：
+    NOTE_PROMPT_TEMPLATE = """根據以下影片資訊，直接以純文字輸出 Markdown 筆記。
+
+【最重要】不要建立檔案，不要使用任何工具，直接回傳 Markdown 文字內容。
 
 ## 影片資訊
 - 連結：{url}
@@ -107,7 +119,7 @@ class CopilotCLISummarizer:
 ## 影片內容
 {content}
 
-直接輸出以下格式的 Markdown：
+直接輸出以下格式的 Markdown（純文字，不要建立檔案）：
 
 ## 來源資訊
 - 連結：[原始連結]({url})
@@ -181,13 +193,18 @@ class CopilotCLISummarizer:
         # 使用臨時目錄作為工作目錄，避免讀取專案上下文
         temp_dir = tempfile.gettempdir()
         
-        # 建立命令
+        # 將 prompt 寫入臨時檔案，避免命令列長度限制
+        import os
+        prompt_file = os.path.join(temp_dir, "copilot_prompt.txt")
+        with open(prompt_file, "w", encoding="utf-8") as f:
+            f.write(full_prompt)
+        
+        # 建立命令 - 從檔案讀取 prompt
         cmd = [
             self.copilot_path,
-            "-p", full_prompt,
+            "-p", f"@{prompt_file}",
             "-s",  # silent mode - 只輸出回應
             "--model", self.model,
-            "--allow-all-tools",  # 允許工具但我們的 prompt 會指示不使用
         ]
         
         logger.info(f"執行 Copilot CLI (model={self.model})")
@@ -196,21 +213,21 @@ class CopilotCLISummarizer:
             result = subprocess.run(
                 cmd,
                 capture_output=True,
-                text=True,
                 timeout=120,  # 2 分鐘超時
-                encoding="utf-8",
                 cwd=temp_dir,  # 使用臨時目錄
             )
             
-            # Copilot CLI 可能在 stderr 輸出統計資訊，但主要回應在 stdout
-            output = result.stdout.strip()
+            # 使用 errors='replace' 避免 UTF-8 解碼錯誤
+            stdout = result.stdout.decode("utf-8", errors="replace").strip()
+            stderr = result.stderr.decode("utf-8", errors="replace").strip()
             
-            if not output and result.returncode != 0:
-                error_msg = result.stderr or "Unknown error"
+            # Copilot CLI 可能在 stderr 輸出統計資訊，但主要回應在 stdout
+            if not stdout and result.returncode != 0:
+                error_msg = stderr or "Unknown error"
                 logger.error(f"Copilot CLI 執行失敗: {error_msg}")
                 raise RuntimeError(f"Copilot CLI 錯誤: {error_msg}")
             
-            return output
+            return stdout
             
         except subprocess.TimeoutExpired:
             raise RuntimeError("Copilot CLI 執行超時（超過 2 分鐘）")
@@ -499,7 +516,9 @@ class CopilotCLISummarizer:
 
     # ==================== 貼文筆記生成 ====================
 
-    POST_NOTE_PROMPT_TEMPLATE = """根據以下 Instagram 貼文，直接輸出 Markdown 筆記（不要問問題）：
+    POST_NOTE_PROMPT_TEMPLATE = """根據以下 Instagram 貼文，直接以純文字輸出 Markdown 筆記。
+
+【最重要】不要建立檔案，不要使用任何工具，直接回傳 Markdown 文字內容。
 
 ## 貼文資訊
 - 連結：{url}
@@ -587,7 +606,9 @@ class CopilotCLISummarizer:
 
     # ==================== Threads 筆記生成功能 ====================
 
-    THREADS_NOTE_PROMPT_TEMPLATE = """根據以下 Threads 串文，直接輸出 Markdown 筆記（不要問問題）：
+    THREADS_NOTE_PROMPT_TEMPLATE = """根據以下 Threads 串文，直接以純文字輸出 Markdown 筆記。
+
+【最重要】不要建立檔案，不要使用任何工具，直接回傳 Markdown 文字內容。
 
 ## 串文資訊
 - 連結：{url}

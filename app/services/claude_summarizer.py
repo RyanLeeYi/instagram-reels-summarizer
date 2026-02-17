@@ -40,14 +40,18 @@ class NoteResult:
 class ClaudeCodeSummarizer:
     """使用 Claude Code CLI 的摘要生成服務"""
 
-    SYSTEM_PROMPT = """你是一個專業的內容摘要助手。收到影片逐字稿後，請直接輸出摘要結果，不要詢問使用者，不要使用任何工具。
+    SYSTEM_PROMPT = """你是一個專業的內容摘要助手。收到影片逐字稿後，請直接以純文字輸出摘要結果。
 
-規則：
+【最重要規則】
+- 不要建立檔案、不要使用任何工具
+- 不要詢問使用者
+- 直接輸出結果文字
+
+其他規則：
 1. 摘要以繁體中文撰寫，約 100-200 字
 2. 條列重點 3-5 個要點
 3. 保持客觀，不加個人意見
-4. 特別注意工具名稱、技術術語
-5. 直接輸出結果，不要問問題"""
+4. 特別注意工具名稱、技術術語"""
 
     USER_PROMPT_TEMPLATE = """以下是影片逐字稿，請直接生成摘要（不要問問題，直接輸出結果）：
 
@@ -88,15 +92,23 @@ class ClaudeCodeSummarizer:
 【畫面觀察】
 • （重要視覺資訊，1-3 點）"""
 
-    NOTE_SYSTEM_PROMPT = """你是筆記整理助手。收到影片資訊後，直接輸出 Markdown 筆記，不要詢問使用者，不要使用工具。
+    NOTE_SYSTEM_PROMPT = """你是筆記整理助手。收到影片資訊後，直接以純文字輸出 Markdown 筆記。
 
-規則：
+【最重要規則】
+- 絕對不要建立檔案、不要使用任何工具（如 create_file、write_file 等）
+- 絕對不要使用任何檔案系統操作
+- 只需要回傳 Markdown 文字，不要有其他動作
+- 不要詢問使用者任何問題
+
+其他規則：
 1. 全部使用繁體中文（台灣用語）
 2. 使用 ## 二級標題分隔區塊
 3. 列表使用 - 符號
-4. 直接輸出 Markdown，不要加說明"""
+4. 直接輸出 Markdown 文字，不要加說明"""
 
-    NOTE_PROMPT_TEMPLATE = """根據以下影片資訊，直接輸出 Markdown 筆記（不要問問題）：
+    NOTE_PROMPT_TEMPLATE = """根據以下影片資訊，直接以純文字輸出 Markdown 筆記。
+
+【最重要】不要建立檔案，不要使用任何工具，直接回傳 Markdown 文字內容。
 
 ## 影片資訊
 - 連結：{url}
@@ -106,7 +118,7 @@ class ClaudeCodeSummarizer:
 ## 影片內容
 {content}
 
-直接輸出以下格式的 Markdown：
+直接輸出以下格式的 Markdown（純文字，不要建立檔案）：
 
 ## 來源資訊
 - 連結：[原始連結]({url})
@@ -538,6 +550,7 @@ class ClaudeCodeSummarizer:
 
     POST_NOTE_PROMPT_TEMPLATE = """請根據以下 Instagram 貼文內容，生成一份結構清晰的 Markdown 筆記。
 
+【最重要】直接以純文字輸出 Markdown 內容，不要建立檔案，不要使用任何工具。
 【語言要求】請務必使用繁體中文（台灣用語）撰寫所有內容。
 
 ## 貼文資訊
@@ -570,7 +583,7 @@ class ClaudeCodeSummarizer:
    - 使用 - 作為列表符號
    - 連結使用 [文字](網址) 格式
    - 【重要】全部使用繁體中文，不要使用簡體中文
-   - 【重要】「工具與技術」區塊只列出圖片中實際出現的項目"""
+   - 【重要】直接輸出 Markdown 文字，不要建立檔案，不要使用 create_file 等工具"""
 
     def _generate_post_note_sync(
         self,
@@ -658,6 +671,7 @@ class ClaudeCodeSummarizer:
 
     THREADS_NOTE_PROMPT_TEMPLATE = """請根據以下 Threads 串文內容，生成一份結構清晰的 Markdown 筆記。
 
+【最重要】直接以純文字輸出 Markdown 內容，不要建立檔案，不要使用任何工具。
 【語言要求】請務必使用繁體中文（台灣用語）撰寫所有內容。
 
 ## 串文資訊

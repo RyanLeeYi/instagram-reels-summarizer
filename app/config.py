@@ -62,6 +62,11 @@ class Settings(BaseSettings):
     threads_fetch_replies: bool = Field(default=True, env="THREADS_FETCH_REPLIES")
     threads_max_replies: int = Field(default=50, env="THREADS_MAX_REPLIES")
 
+    # NotebookLM 設定 (Chrome CDP 連線)
+    notebooklm_enabled: bool = Field(default=False, env="NOTEBOOKLM_ENABLED")
+    notebooklm_cdp_url: str = Field(default="http://localhost:9222", env="NOTEBOOKLM_CDP_URL")
+    notebooklm_upload_video: bool = Field(default=True, env="NOTEBOOKLM_UPLOAD_VIDEO")
+
     @property
     def allowed_chat_ids(self) -> List[str]:
         """解析允許的 chat_id 列表"""

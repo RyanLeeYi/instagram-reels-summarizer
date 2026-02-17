@@ -1,0 +1,22 @@
+# Netscape HTTP Cookie File
+# This file is for Google/NotebookLM authentication.
+#
+# HOW TO GET YOUR COOKIES:
+# 1. Install browser extension "Get cookies.txt LOCALLY" or similar
+# 2. Login to Google in your browser
+# 3. Visit https://notebooklm.google.com
+# 4. Export cookies using the extension (select "All cookies" or "google.com")
+# 5. Save as notebooklm_cookies.txt in this directory
+#
+# IMPORTANT: Never commit this file to git!
+# The real notebooklm_cookies.txt file is ignored by .gitignore
+#
+# Example format (these are fake values):
+.google.com	TRUE	/	TRUE	1769168445	NID	XXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX
+.google.com	TRUE	/	TRUE	1776180426	SID	XXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX
+.google.com	TRUE	/	TRUE	1776180426	HSID	XXXXXXXXXXXXXXXXX
+.google.com	TRUE	/	TRUE	1776180426	SSID	XXXXXXXXXXXXXXXXX
+.google.com	TRUE	/	TRUE	1776180426	APISID	XXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX
+.google.com	TRUE	/	TRUE	1776180426	SAPISID	XXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX
+.google.com	TRUE	/	TRUE	1776180426	__Secure-1PSID	XXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX
+.google.com	TRUE	/	TRUE	1776180426	__Secure-3PSID	XXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX

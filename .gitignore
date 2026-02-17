@@ -44,6 +44,7 @@ env/
 
 # Sensitive Files - NEVER COMMIT
 cookies.txt
+notebooklm_cookies.txt
 *.cookie
 *.cookies
 

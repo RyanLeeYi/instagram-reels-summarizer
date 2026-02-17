@@ -93,6 +93,23 @@ class ProcessedURL(Base):
         return f"<ProcessedURL(id={self.id}, url={self.url[:40]}..., type={self.url_type})>"
 
 
+class NotebookLMNotebook(Base):
+    """NotebookLM Notebook 記錄資料表（按日期分組）"""
+
+    __tablename__ = "notebooklm_notebooks"
+
+    id: int = Column(Integer, primary_key=True, autoincrement=True)
+    date: str = Column(String(10), nullable=False, unique=True, index=True)  # YYYY-MM-DD
+    notebook_url: str = Column(Text, nullable=False)
+    notebook_title: str = Column(Text, nullable=False)
+    source_count: int = Column(Integer, default=0)
+    created_at: datetime = Column(DateTime, default=datetime.utcnow)
+    updated_at: datetime = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+    def __repr__(self) -> str:
+        return f"<NotebookLMNotebook(id={self.id}, date={self.date}, sources={self.source_count})>"
+
+
 async def init_db() -> None:
     """初始化資料庫，建立所有表格"""
     async with async_engine.begin() as conn:
@@ -156,3 +173,86 @@ async def save_processed_url(
         await session.commit()
         await session.refresh(processed)
         return processed
+
+
+async def delete_processed_url(url: str) -> bool:
+    """刪除已處理的 URL 紀錄
+    
+    Args:
+        url: 要刪除的 URL
+        
+    Returns:
+        是否成功刪除
+    """
+    from sqlalchemy import delete
+    
+    async with AsyncSessionLocal() as session:
+        result = await session.execute(
+            delete(ProcessedURL).where(ProcessedURL.url == url)
+        )
+        await session.commit()
+        return result.rowcount > 0
+
+
+# ==================== NotebookLMNotebook 操作函數 ====================
+
+async def get_notebook_by_date(date_str: str) -> Optional[NotebookLMNotebook]:
+    """根據日期取得 NotebookLM Notebook 記錄
+    
+    Args:
+        date_str: 日期字串 (YYYY-MM-DD)
+        
+    Returns:
+        NotebookLMNotebook 物件（如果存在），否則 None
+    """
+    from sqlalchemy import select
+    
+    async with AsyncSessionLocal() as session:
+        result = await session.execute(
+            select(NotebookLMNotebook).where(NotebookLMNotebook.date == date_str)
+        )
+        return result.scalar_one_or_none()
+
+
+async def save_or_update_notebook(
+    date_str: str,
+    notebook_url: str,
+    notebook_title: str,
+    increment_source: bool = True,
+) -> NotebookLMNotebook:
+    """儲存或更新 NotebookLM Notebook 記錄
+    
+    Args:
+        date_str: 日期字串 (YYYY-MM-DD)
+        notebook_url: NotebookLM Notebook URL
+        notebook_title: Notebook 標題
+        increment_source: 是否增加 source 計數
+        
+    Returns:
+        NotebookLMNotebook 物件
+    """
+    from sqlalchemy import select
+    
+    async with AsyncSessionLocal() as session:
+        result = await session.execute(
+            select(NotebookLMNotebook).where(NotebookLMNotebook.date == date_str)
+        )
+        notebook = result.scalar_one_or_none()
+        
+        if notebook:
+            notebook.notebook_url = notebook_url
+            notebook.updated_at = datetime.utcnow()
+            if increment_source:
+                notebook.source_count = notebook.source_count + 1
+        else:
+            notebook = NotebookLMNotebook(
+                date=date_str,
+                notebook_url=notebook_url,
+                notebook_title=notebook_title,
+                source_count=1 if increment_source else 0,
+            )
+            session.add(notebook)
+        
+        await session.commit()
+        await session.refresh(notebook)
+        return notebook
