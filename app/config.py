@@ -66,6 +66,11 @@ class Settings(BaseSettings):
     notebooklm_enabled: bool = Field(default=False, env="NOTEBOOKLM_ENABLED")
     notebooklm_cdp_url: str = Field(default="http://localhost:9222", env="NOTEBOOKLM_CDP_URL")
     notebooklm_upload_video: bool = Field(default=True, env="NOTEBOOKLM_UPLOAD_VIDEO")
+    notebooklm_chrome_profile: str = Field(
+        default="",
+        env="NOTEBOOKLM_CHROME_PROFILE",
+        description="Chrome CDP 專用 user-data-dir，空字串時使用 ~/.chrome-cdp-notebooklm",
+    )
 
     @property
     def allowed_chat_ids(self) -> List[str]:

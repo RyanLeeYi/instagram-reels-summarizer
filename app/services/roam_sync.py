@@ -290,7 +290,7 @@ class RoamSyncService:
         original_url: str,
     ) -> RoamSyncResult:
         """
-        儲存 Threads 串文筆記
+        儲存 Threads 串文筆記（包含原始連結附錄）
 
         Args:
             author: Threads 作者名稱
@@ -304,8 +304,11 @@ class RoamSyncService:
             # 使用作者名稱作為標題的一部分
             page_title = self._generate_page_title(f"@{author}", prefix="Threads")
 
-            # 直接使用 LLM 生成的內容
-            return await self._save_to_local(page_title, markdown_content)
+            # 在 Markdown 內容末尾附加原始連結
+            appendix = self._format_threads_appendix(original_url)
+            full_content = markdown_content + appendix
+
+            return await self._save_to_local(page_title, full_content)
 
         except Exception as e:
             error_msg = str(e)
@@ -314,6 +317,26 @@ class RoamSyncService:
                 success=False,
                 error_message=f"儲存失敗: {error_msg}",
             )
+
+    @staticmethod
+    def _format_threads_appendix(original_url: str) -> str:
+        """
+        格式化 Threads 附錄（原始連結）
+
+        Args:
+            original_url: Threads 原始連結
+
+        Returns:
+            str: 格式化後的 Markdown 附錄
+        """
+        if not original_url or not original_url.strip():
+            return ""
+
+        appendix = "\n\n---\n\n## 附錄\n\n"
+        appendix += "### 原始連結\n\n"
+        appendix += f"- 🧵 [{original_url}]({original_url})\n\n"
+
+        return appendix
 
     async def _sync_via_claude_code(self, file_path: Path, page_title: str) -> bool:
         """

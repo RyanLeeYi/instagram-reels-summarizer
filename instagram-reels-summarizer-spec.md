@@ -16,7 +16,7 @@
 | Telegram Bot 接收連結 | 接收 Instagram Reels / 圖文貼文 / Threads 連結 | 高 |
 | Instagram Reels 下載 | 解析連結並下載 Reels 短影片 (yt-dlp) | 高 |
 | Instagram 圖文貼文下載 | 下載多圖 Carousel 貼文 (Instaloader) | 高 |
-| Threads 貼文下載 | 下載 Threads 貼文含回覆串、圖片、影片 | 高 |
+| Threads 貼文下載 | 下載 Threads 貼文與串文（Googlebot SSR 自動偵測作者連續貼文） | 高 |
 | 語音轉逐字稿 | 使用 faster-whisper 本地模型將影片音訊轉為文字 | 高 |
 | AI 摘要生成 | 多後端支援：Ollama（本地）/ Claude Code CLI / GitHub Copilot CLI | 高 |
 | 視覺分析 | 使用 Gemma3 / MiniCPM-V 分析影片畫面內容（動態 8-10 幀、並行處理） | 中 |
@@ -67,6 +67,49 @@
               └──────────┘  └──────────┘  └────────────────┘
 ```
 
+### 2.2.1 Threads 下載流程（三層降級）
+
+```
+┌──────────────────────────────────────────────────────────────────────┐
+│                    Threads 下載降級策略                               │
+└──────────────────────────────────────────────────────────────────────┘
+
+                    ┌──────────────┐
+                    │ Threads URL  │
+                    └──────┬───────┘
+                           ▼
+                  ┌─────────────────┐
+              ┌───│ MetaThreads API │───┐
+              │   └─────────────────┘   │
+           成功│                        │失敗 (login_required)
+              ▼                         ▼
+     ┌──────────────┐        ┌──────────────────┐
+     │ 單則貼文結果  │        │ Googlebot SSR    │
+     └───────┬──────┘        │ (User-Agent 偽裝) │
+             │               └────────┬─────────┘
+             │                        │
+             │              ┌─────────┴──────────┐
+             │           成功│                    │失敗
+             │              ▼                     ▼
+             │    ┌──────────────────┐  ┌───────────────┐
+             │    │ 解析 thread_items│  │ Web Scraping  │
+             │    │ 過濾作者貼文     │  │ (傳統備用方案) │
+             │    └────────┬────────┘  └───────────────┘
+             │             │
+             │    ┌────────┴────────┐
+             │    │ 1則=single_post │
+             │    │ N則=thread      │
+             │    └─────────────────┘
+             │
+             ▼
+   ┌───────────────────┐
+   │ 也嘗試 SSR 檢查   │  ← API 成功時仍用 SSR 確認是否為串文
+   │ 是否有更多串文貼文 │
+   └───────────────────┘
+```
+
+**Googlebot SSR 原理**：使用 `Googlebot/2.1` User-Agent 請求 Threads 頁面，Meta 會回傳 server-side rendered HTML，其中包含完整的 JSON 資料（含 `thread_items` 陣列）。系統從中解析所有貼文，並過濾只保留原作者的貼文（排除他人回覆），實現串文自動偵測。
+
 ### 2.3 例外處理
 
 | 情境 | 處理方式 |
@@ -92,7 +135,7 @@
 | Telegram Bot | python-telegram-bot 套件 |
 | Instagram Reels 下載 | yt-dlp + cookies.txt 認證 |
 | Instagram 貼文下載 | Instaloader |
-| Threads 下載 | Threads API + 自定義解析 |
+| Threads 下載 | Threads API + Googlebot SSR + Web Scraping（三層降級） |
 | 語音轉錄 | faster-whisper 本地模型 |
 | 摘要生成 | Ollama（本地）/ Claude Code CLI / GitHub Copilot CLI |
 | 視覺分析 | Ollama + Gemma3 / MiniCPM-V 本地模型 |
@@ -422,6 +465,7 @@ TEMP_VIDEO_DIR=./temp_videos
 - [x] 能正確下載 Instagram Reels 影片 (yt-dlp)
 - [x] 能正確下載 Instagram 多圖貼文 (Instaloader)
 - [x] 能正確下載 Threads 貼文含回覆串
+- [x] 能正確偵測並下載 Threads 串文（作者多則連續貼文，排除他人回覆）
 - [x] 能透過 faster-whisper 本地模型將影片語音轉為文字（支援中英文）
 - [x] 能透過 Gemma3 / MiniCPM-V 本地模型分析影片畫面內容
 - [x] 能透過 Ollama + Qwen3 本地模型生成中文摘要與條列重點
@@ -454,7 +498,7 @@ instagram-reels-summarizer/
 │   ├── services/
 │   │   ├── __init__.py
 │   │   ├── downloader.py       # Instagram 下載 (yt-dlp + Instaloader)
-│   │   ├── threads_downloader.py # Threads 貼文下載
+│   │   ├── threads_downloader.py # Threads 貼文/串文下載（API + Googlebot SSR + Web Scraping）
 │   │   ├── download_logger.py  # 下載記錄
 │   │   ├── transcriber.py      # 本地 Whisper 轉錄 (faster-whisper)
 │   │   ├── summarizer.py       # 本地 LLM 摘要 (Ollama + Qwen3)
@@ -535,3 +579,4 @@ instagram-reels-summarizer/
 *更新: 2026-02-10 新增 Instagram 圖文貼文支援、Threads 貼文支援*
 *更新: 2026-02-16 新增 NotebookLM 自動同步（Chrome CDP + Playwright）*
 *更新: 2026-02-17 NotebookLM 多圖批次上傳、頁面跳轉修復、更新預設模型為 Qwen3 + Gemma3*
+*更新: 2026-02-19 Threads 串文支援（Googlebot SSR 自動偵測作者連續貼文、過濾他人回覆、per-post 媒體處理）*

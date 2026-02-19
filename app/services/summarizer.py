@@ -402,8 +402,11 @@ class OllamaSummarizer:
                 content_parts.append(f"【語音逐字稿】\n{transcript}")
                 if visual_description:
                     content_parts.append(f"【畫面描述】\n{visual_description}")
-            else:
-                content_parts.append(f"【此影片無語音，以下為畫面分析】\n{visual_description or transcript}")
+            elif visual_description:
+                content_parts.append(f"【此影片無語音，以下為畫面分析】\n{visual_description}")
+            elif not content_parts:
+                # 沒有逐字稿、沒有畫面描述、也沒有貼文說明（理論上不應走到這裡）
+                content_parts.append("【此影片無可用內容】")
             
             content = "\n\n".join(content_parts)
             
@@ -544,10 +547,11 @@ class OllamaSummarizer:
         Returns:
             NoteResult: 筆記生成結果
         """
-        if not transcript and not visual_description:
+        has_caption = bool(caption and caption.strip())
+        if not transcript and not visual_description and not has_caption:
             return NoteResult(
                 success=False,
-                error_message="沒有可用的內容（無逐字稿也無視覺描述）",
+                error_message="沒有可用的內容（無逐字稿、無視覺描述、無貼文說明）",
             )
 
         # 在執行緒池中執行（避免阻塞）

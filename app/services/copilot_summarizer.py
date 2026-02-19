@@ -196,8 +196,10 @@ class CopilotCLISummarizer:
         # 將 prompt 寫入臨時檔案，避免命令列長度限制
         import os
         prompt_file = os.path.join(temp_dir, "copilot_prompt.txt")
+        # 使用 surrogatepass 編碼再 replace 解碼，清除無效 surrogate 字元
+        safe_prompt = full_prompt.encode('utf-8', 'surrogatepass').decode('utf-8', 'replace')
         with open(prompt_file, "w", encoding="utf-8") as f:
-            f.write(full_prompt)
+            f.write(safe_prompt)
         
         # 建立命令 - 從檔案讀取 prompt
         cmd = [
@@ -406,8 +408,11 @@ class CopilotCLISummarizer:
                 content_parts.append(f"【語音逐字稿】\n{transcript}")
                 if visual_description:
                     content_parts.append(f"【畫面描述】\n{visual_description}")
-            else:
-                content_parts.append(f"【此影片無語音，以下為畫面分析】\n{visual_description or transcript}")
+            elif visual_description:
+                content_parts.append(f"【此影片無語音，以下為畫面分析】\n{visual_description}")
+            elif not content_parts:
+                # 沒有逐字稿、沒有畫面描述、也沒有貼文說明（理論上不應走到這裡）
+                content_parts.append("【此影片無可用內容】")
             
             content = "\n\n".join(content_parts)
             
@@ -496,10 +501,11 @@ class CopilotCLISummarizer:
         caption: str = None,
     ) -> NoteResult:
         """生成 Markdown 筆記"""
-        if not transcript or not transcript.strip():
+        has_caption = bool(caption and caption.strip())
+        if not transcript and not visual_description and not has_caption:
             return NoteResult(
                 success=False,
-                error_message="逐字稿內容為空",
+                error_message="沒有可用的內容（無逐字稿、無視覺描述、無貼文說明）",
             )
 
         loop = asyncio.get_event_loop()
@@ -560,7 +566,7 @@ class CopilotCLISummarizer:
             )
             
             note_system_prompt = self.prompt_loader.load_prompt(
-                "post_note_system",
+                "system/note_system",
                 fallback=self.NOTE_SYSTEM_PROMPT
             )
             
@@ -666,7 +672,7 @@ class CopilotCLISummarizer:
                 )
 
             note_system_prompt = self.prompt_loader.load_prompt(
-                "note_system",
+                "system/note_system",
                 fallback=self.NOTE_SYSTEM_PROMPT
             )
 

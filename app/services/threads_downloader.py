@@ -69,9 +69,10 @@ class ThreadsDownloadResult:
     """Threads 下載結果"""
 
     success: bool
-    content_type: str = "single_post"  # "single_post" | "thread_conversation"
+    content_type: str = "single_post"  # "single_post" | "thread_conversation" | "thread"
     post: Optional[ThreadPost] = None
     conversation: Optional[ThreadConversation] = None
+    thread_posts: List[ThreadPost] = field(default_factory=list)  # 作者串文（多則連續貼文）
     error_message: Optional[str] = None
 
 
@@ -212,14 +213,22 @@ class ThreadsDownloader:
         """
         try:
             # 使用 latin-1 編碼然後 unicode-escape 解碼
-            return raw_text.encode('latin-1').decode('unicode-escape')
+            decoded = raw_text.encode('latin-1').decode('unicode-escape')
         except Exception:
             try:
                 # 備用方案：直接 unicode-escape
-                return raw_text.encode('utf-8').decode('unicode-escape')
+                decoded = raw_text.encode('utf-8').decode('unicode-escape')
             except Exception:
                 # 最後方案：返回原始文字
                 return raw_text
+        
+        # 清除 surrogate characters（emoji 的 surrogate pairs 在 unicode-escape 解碼後
+        # 可能產生無效的 surrogate 字元，需要轉換為正確的 UTF-8）
+        try:
+            decoded = decoded.encode('utf-16', 'surrogatepass').decode('utf-16')
+        except Exception:
+            decoded = decoded.encode('utf-8', 'replace').decode('utf-8')
+        return decoded
 
     def _download_via_web_scraping(self, url: str) -> Optional[ThreadPost]:
         """
@@ -252,82 +261,71 @@ class ThreadsDownloader:
             # 提取貼文 ID
             post_id = self.extract_post_id(url) or ""
             
-            # 檢查是否為串文（thread）
-            is_thread = 'thread_items' in html
+            logger.debug(f"Web scraping: 主貼文 ID={post_id}")
             
-            # 找到所有貼文的 code（ID），用於識別串文中的貼文
-            all_codes = re.findall(r'"code":"([A-Za-z0-9_-]+)"', html)
-            # 過濾掉非貼文 code（如 en_US）
-            post_codes = [c for c in all_codes if len(c) > 5 and not c.startswith('en_')]
-            # 取得主貼文 ID 的前綴（串文中的貼文通常有相似的 ID 前綴）
-            main_prefix = post_id[:4] if post_id else ""
-            # 串文中的貼文 code
-            thread_codes = set(c for c in post_codes if c.startswith(main_prefix)) if main_prefix else set()
+            # 提取文字內容 — Web scraping 只處理單一貼文
+            # 串文偵測交由 Googlebot SSR 處理
+            text_content = ""
             
-            logger.debug(f"Web scraping: 主貼文 ID={post_id}, 串文貼文數={len(thread_codes)}")
+            # 優先從 caption 欄位取得（最可靠）
+            caption_match = re.search(r'"caption":\s*\{\s*"text":"((?:[^"\\]|\\.)*)"', html)
+            if caption_match:
+                text_content = self._decode_unicode_text(caption_match.group(1))
             
-            # 提取所有文字內容
-            text_matches = re.findall(r'"text":"((?:[^"\\]|\\.)*?)"', html)
-            logger.debug(f"Web scraping: 找到 {len(text_matches)} 個 text 欄位")
-            
-            all_texts = []
-            seen_texts = set()  # 用於去重
-            
-            for raw_text in text_matches:
-                if len(raw_text) < 10:  # 忽略太短的文字
-                    continue
-                    
-                decoded = self._decode_unicode_text(raw_text)
-                
-                # 去重（避免重複的文字）
-                text_hash = decoded[:50] if len(decoded) > 50 else decoded
-                if text_hash in seen_texts:
-                    continue
-                seen_texts.add(text_hash)
-                
-                # 過濾掉非貼文內容
-                if is_thread and len(thread_codes) > 1:
-                    # 對於串文，只收集：
-                    # 1. 有編號的文字 (1️⃣ 2️⃣ 等)
-                    # 2. 第一則（最長）的貼文
-                    # 3. 結尾類的文字（如果你也覺得...）
-                    has_number = any(c in decoded for c in '1️⃣2️⃣3️⃣4️⃣5️⃣6️⃣7️⃣8️⃣9️⃣🔟')
-                    is_conclusion = decoded.startswith('如果你也') or decoded.startswith('歡迎')
-                    is_main_post = len(decoded) > 200  # 主貼文通常較長
-                    
-                    if has_number or is_conclusion or is_main_post:
-                        all_texts.append(decoded)
-                else:
-                    # 單一貼文或無法識別串文結構
-                    all_texts.append(decoded)
-            
-            # 組合文字內容
-            if is_thread and len(all_texts) > 1:
-                # 串文：按順序組合，用分隔線分開
-                text_content = "\n\n---\n\n".join(all_texts)
-                logger.info(f"Web scraping: 偵測到串文，共 {len(all_texts)} 則貼文")
-            elif all_texts:
-                # 單一貼文：取最長的
-                text_content = max(all_texts, key=len)
-            else:
-                text_content = ""
-            
-            # 如果文字內容是空的，嘗試其他方法
+            # 備用：從所有 text 欄位中取最長的
             if not text_content:
-                caption_match = re.search(r'"caption":\s*\{\s*"text":"((?:[^"\\]|\\.)*)"', html)
-                if caption_match:
-                    text_content = self._decode_unicode_text(caption_match.group(1))
+                text_matches = re.findall(r'"text":"((?:[^"\\]|\\.)*?)"', html)
+                all_texts = []
+                seen_texts = set()
+                
+                for raw_text in text_matches:
+                    if len(raw_text) < 10:
+                        continue
+                    decoded = self._decode_unicode_text(raw_text)
+                    text_hash = decoded[:50] if len(decoded) > 50 else decoded
+                    if text_hash in seen_texts:
+                        continue
+                    seen_texts.add(text_hash)
+                    all_texts.append(decoded)
+                
+                if all_texts:
+                    text_content = max(all_texts, key=len)
             
             # 提取媒體 URL
             media_list: List[ThreadsMedia] = []
             
-            # 圖片 URL (scontent CDN)
+            # 圖片 URL — 支援多種 CDN 域名
+            # 1. scontent CDN (舊版)
             img_urls = re.findall(r'"url":"(https://scontent[^"]+)"', html)
-            # 過濾掉 profile 圖片（通常較小）
-            img_urls = [u for u in img_urls if 's150x150' not in u and '_s150x150' not in u and 't51.2885' not in u]
+            # 2. instagram.*.fna.fbcdn.net CDN (新版 Threads)
+            fbcdn_imgs = re.findall(
+                r'(https?://instagram\.[a-z0-9.-]+\.fna\.fbcdn\.net/v/[^\s"\'\\>]+\.(?:jpg|jpeg|png|webp)[^\s"\'\\>]*)',
+                html,
+            )
+            img_urls.extend(fbcdn_imgs)
+            # 3. og:image meta tag（作為最後手段，至少取到封面圖）
+            if not img_urls:
+                og_imgs = re.findall(
+                    r'(?:property|name)="og:image"\s+content="([^"]+)"',
+                    html,
+                )
+                for og_url in og_imgs:
+                    # HTML entity decode
+                    decoded_url = og_url.replace("&amp;", "&")
+                    img_urls.append(decoded_url)
+            
+            # 過濾掉 profile 圖片和縮圖
+            img_urls = [
+                u for u in img_urls
+                if "s150x150" not in u
+                and "_s150x150" not in u
+                and "t51.2885-19" not in u  # 19 = profile pic，15 = content image
+            ]
             # 去重並取最高解析度
             seen_base = set()
             for img_url in img_urls:
+                # HTML entity decode
+                img_url = img_url.replace("&amp;", "&")
                 # 取基本 URL（去掉解析度參數）
                 base_url = re.sub(r'_e\d+_', '_', img_url.split('?')[0])
                 if base_url not in seen_base:
@@ -389,6 +387,257 @@ class ThreadsDownloader:
             return None
         except Exception as e:
             logger.error(f"Web scraping 解析失敗: {e}")
+            return None
+
+    # ==================== Googlebot SSR 方法 ====================
+
+    def _download_via_googlebot_ssr(self, url: str) -> Optional[ThreadsDownloadResult]:
+        """
+        透過 Googlebot User-Agent 取得 Threads SSR 資料。
+        Meta 會對 Googlebot 回傳 server-side rendered HTML，其中包含
+        完整的 JSON 資料（含 thread_items 陣列）。
+
+        此方法可正確辨識作者的串文（多則連續貼文），自動過濾
+        其他人的回覆，只保留原作者的貼文。
+
+        Args:
+            url: Threads 貼文 URL
+
+        Returns:
+            ThreadsDownloadResult 或 None（失敗時）
+        """
+        logger.info("嘗試使用 Googlebot SSR 抓取 Threads 貼文...")
+
+        try:
+            headers = {
+                "User-Agent": "Mozilla/5.0 (compatible; Googlebot/2.1; +http://www.google.com/bot.html)",
+                "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+            }
+            response = requests.get(url, headers=headers, timeout=30)
+            response.raise_for_status()
+
+            html = response.text
+
+            if "thread_items" not in html:
+                logger.warning("Googlebot SSR: 回應中無 thread_items")
+                return None
+
+            # 解析所有 thread_items 陣列
+            all_thread_posts = self._parse_googlebot_ssr_thread_items(html, url)
+
+            if not all_thread_posts:
+                logger.warning("Googlebot SSR: 無法解析任何貼文")
+                return None
+
+            # 取得主作者（第一則貼文的作者）
+            main_author = all_thread_posts[0].author_username
+
+            # 過濾：只保留原作者的貼文（排除其他人的回覆）
+            author_posts = [
+                p for p in all_thread_posts
+                if p.author_username == main_author
+            ]
+
+            logger.info(
+                f"Googlebot SSR 成功: @{main_author}, "
+                f"作者貼文 {len(author_posts)}/{len(all_thread_posts)} 則"
+            )
+
+            if len(author_posts) == 1:
+                # 單一貼文
+                return ThreadsDownloadResult(
+                    success=True,
+                    content_type="single_post",
+                    post=author_posts[0],
+                )
+            else:
+                # 串文（多則連續貼文）
+                return ThreadsDownloadResult(
+                    success=True,
+                    content_type="thread",
+                    thread_posts=author_posts,
+                )
+
+        except requests.RequestException as e:
+            logger.error(f"Googlebot SSR 請求失敗: {e}")
+            return None
+        except Exception as e:
+            logger.error(f"Googlebot SSR 解析失敗: {e}")
+            return None
+
+    def _parse_googlebot_ssr_thread_items(
+        self, html: str, url: str
+    ) -> List[ThreadPost]:
+        """
+        從 Googlebot SSR HTML 中解析所有 thread_items。
+
+        SSR 回應結構：
+        - edges[0].node.thread_items: 主貼文（1 則）
+        - reply_threads[n].thread_items: 各回覆/續文（各 1 則）
+
+        Args:
+            html: Googlebot SSR 回傳的 HTML
+            url: 原始 URL（用於提取 username）
+
+        Returns:
+            所有貼文的列表（按出現順序）
+        """
+        import json as json_mod
+
+        all_posts: List[ThreadPost] = []
+        seen_codes: set = set()
+
+        # 提取 username 作為 fallback
+        fallback_username = self.extract_username(url) or "unknown"
+
+        # 策略：找出每個 "thread_items": [...] 並解析內容
+        # 使用 JSON 解碼器逐一抽取
+        pattern = re.compile(r'"thread_items":\s*\[')
+        for match in pattern.finditer(html):
+            start = match.start() + len('"thread_items":')
+            # 找到陣列的開頭 '[' 位置
+            bracket_start = html.index("[", start)
+
+            # 用括號計數找到對應的 ']'
+            depth = 0
+            pos = bracket_start
+            while pos < len(html):
+                ch = html[pos]
+                if ch == "[":
+                    depth += 1
+                elif ch == "]":
+                    depth -= 1
+                    if depth == 0:
+                        break
+                elif ch == '"':
+                    # 跳過字串內容
+                    pos += 1
+                    while pos < len(html) and html[pos] != '"':
+                        if html[pos] == "\\":
+                            pos += 1  # 跳過跳脫字元
+                        pos += 1
+                pos += 1
+
+            if depth != 0:
+                continue
+
+            array_str = html[bracket_start : pos + 1]
+
+            try:
+                items = json_mod.loads(array_str)
+            except json_mod.JSONDecodeError:
+                continue
+
+            for item in items:
+                post = item.get("post", {})
+                if not post:
+                    continue
+
+                code = post.get("code", "")
+                if code in seen_codes:
+                    continue
+                seen_codes.add(code)
+
+                parsed = self._parse_ssr_post(post, fallback_username)
+                if parsed:
+                    all_posts.append(parsed)
+
+        return all_posts
+
+    def _parse_ssr_post(
+        self, post_data: dict, fallback_username: str = "unknown"
+    ) -> Optional[ThreadPost]:
+        """
+        解析 Googlebot SSR 中單一貼文的 JSON。
+        結構與 MetaThreads API 類似，但欄位可能略有不同。
+
+        Args:
+            post_data: SSR JSON 中的 post 物件
+            fallback_username: 備用使用者名稱
+
+        Returns:
+            ThreadPost 或 None
+        """
+        try:
+            post_id = str(
+                post_data.get("code")
+                or post_data.get("pk")
+                or post_data.get("id")
+                or ""
+            )
+
+            # 使用者資訊
+            user_data = post_data.get("user", {})
+            username = user_data.get("username") or fallback_username
+
+            # 文字內容
+            caption = post_data.get("caption")
+            text_content = ""
+            if isinstance(caption, dict):
+                text_content = caption.get("text", "")
+            elif isinstance(caption, str):
+                text_content = caption
+
+            # 時間戳
+            timestamp = None
+            taken_at = post_data.get("taken_at")
+            if taken_at:
+                try:
+                    timestamp = datetime.fromtimestamp(int(taken_at))
+                except (ValueError, TypeError, OSError):
+                    pass
+
+            # 互動數據
+            like_count = post_data.get("like_count", 0) or 0
+            reply_count = (
+                post_data.get("text_post_app_info", {}).get("direct_reply_count")
+                or post_data.get("reply_count")
+                or 0
+            )
+
+            # 媒體
+            media_list: List[ThreadsMedia] = []
+            carousel_media = post_data.get("carousel_media", [])
+
+            if carousel_media:
+                for media in carousel_media:
+                    if media.get("video_versions"):
+                        best_video = media["video_versions"][0]
+                        media_list.append(ThreadsMedia(
+                            url=best_video["url"],
+                            media_type="video",
+                        ))
+                    elif media.get("image_versions2", {}).get("candidates"):
+                        best_img = media["image_versions2"]["candidates"][0]
+                        media_list.append(ThreadsMedia(
+                            url=best_img["url"],
+                            media_type="image",
+                        ))
+            elif post_data.get("video_versions"):
+                best_video = post_data["video_versions"][0]
+                media_list.append(ThreadsMedia(
+                    url=best_video["url"],
+                    media_type="video",
+                ))
+            elif post_data.get("image_versions2", {}).get("candidates"):
+                best_img = post_data["image_versions2"]["candidates"][0]
+                media_list.append(ThreadsMedia(
+                    url=best_img["url"],
+                    media_type="image",
+                ))
+
+            return ThreadPost(
+                id=post_id,
+                author_username=username,
+                text_content=text_content,
+                timestamp=timestamp,
+                like_count=like_count,
+                reply_count=reply_count,
+                media=media_list,
+            )
+
+        except Exception as e:
+            logger.warning(f"解析 SSR 貼文失敗: {e}")
             return None
 
     def validate_url(self, url: str) -> bool:
@@ -522,9 +771,18 @@ class ThreadsDownloader:
                 api_failed = True
                 api_error_message = str(e)
 
-            # 如果 API 失敗，嘗試 Web Scraping
+            # 如果 API 失敗，嘗試 Googlebot SSR → Web Scraping
             if api_failed:
-                logger.warning(f"MetaThreads API 失敗 ({api_error_message})，嘗試 Web Scraping...")
+                logger.warning(f"MetaThreads API 失敗 ({api_error_message})，嘗試 Googlebot SSR...")
+
+                # 優先嘗試 Googlebot SSR（可正確辨識串文）
+                ssr_result = self._download_via_googlebot_ssr(url)
+                if ssr_result and ssr_result.success:
+                    logger.info(f"✅ Googlebot SSR 成功")
+                    return ssr_result
+
+                # Googlebot SSR 也失敗，退回 Web Scraping
+                logger.warning("Googlebot SSR 失敗，嘗試傳統 Web Scraping...")
                 scraped_post = self._download_via_web_scraping(url)
                 if scraped_post:
                     logger.info(f"✅ Web Scraping 成功: @{scraped_post.author_username}")
@@ -536,15 +794,20 @@ class ThreadsDownloader:
                 else:
                     return ThreadsDownloadResult(
                         success=False,
-                        error_message=f"API 和 Web Scraping 都無法取得內容。\n\nAPI 錯誤: {api_error_message}\n\n請確認：\n1. cookies.txt 包含有效的 Instagram 登入資訊\n2. 或在 .env 設定 THREADS_USERNAME 和 THREADS_PASSWORD",
+                        error_message=f"API、Googlebot SSR 和 Web Scraping 都無法取得內容。\n\nAPI 錯誤: {api_error_message}\n\n請確認：\n1. cookies.txt 包含有效的 Instagram 登入資訊\n2. 或在 .env 設定 THREADS_USERNAME 和 THREADS_PASSWORD",
                     )
 
             # 解析貼文資料
             parent_post = self._parse_post_data(post_data)
 
             if not parent_post:
-                # API 回傳但解析失敗，嘗試 Web Scraping
-                logger.warning("API 資料解析失敗，嘗試 Web Scraping...")
+                # API 回傳但解析失敗，嘗試 Googlebot SSR → Web Scraping
+                logger.warning("API 資料解析失敗，嘗試 Googlebot SSR...")
+                ssr_result = self._download_via_googlebot_ssr(url)
+                if ssr_result and ssr_result.success:
+                    return ssr_result
+
+                logger.warning("Googlebot SSR 也失敗，嘗試傳統 Web Scraping...")
                 scraped_post = self._download_via_web_scraping(url)
                 if scraped_post:
                     return ThreadsDownloadResult(
@@ -556,6 +819,19 @@ class ThreadsDownloader:
                     success=False,
                     error_message="無法解析貼文資料",
                 )
+
+            # API 成功取得單則貼文，但可能是串文的一部分
+            # 嘗試 Googlebot SSR 檢查是否有更多作者的同串貼文
+            ssr_result = self._download_via_googlebot_ssr(url)
+            if ssr_result and ssr_result.success:
+                if ssr_result.content_type == "thread" and len(ssr_result.thread_posts) > 1:
+                    logger.info(
+                        f"✅ Googlebot SSR 偵測到串文 ({len(ssr_result.thread_posts)} 則)，"
+                        f"優先使用 SSR 結果"
+                    )
+                    return ssr_result
+                # SSR 也是單則貼文，使用 API 結果（通常資料更完整）
+                logger.debug("Googlebot SSR 也是單則貼文，使用 API 結果")
 
             # 如果啟用了抓取回覆，嘗試取得對話串
             if settings.threads_fetch_replies:
@@ -767,6 +1043,15 @@ class ThreadsDownloader:
 
         if result.content_type == "single_post" and result.post:
             lines.append(self._format_post(result.post, is_main=True))
+
+        elif result.content_type == "thread" and result.thread_posts:
+            # 串文：作者的多則連續貼文
+            total = len(result.thread_posts)
+            author = result.thread_posts[0].author_username
+            lines.append(f"【串文】 @{author}（共 {total} 則）")
+            for i, post in enumerate(result.thread_posts, 1):
+                lines.append(f"\n--- 【串文 {i}/{total}】 ---")
+                lines.append(self._format_post(post, is_main=(i == 1)))
 
         elif result.content_type == "thread_conversation" and result.conversation:
             # 格式化主貼文
@@ -1035,6 +1320,10 @@ class ThreadsDownloader:
 
         if result.content_type == "single_post" and result.post:
             all_media.extend(result.post.media)
+
+        elif result.content_type == "thread" and result.thread_posts:
+            for post in result.thread_posts:
+                all_media.extend(post.media)
 
         elif result.content_type == "thread_conversation" and result.conversation:
             all_media.extend(result.conversation.parent_post.media)

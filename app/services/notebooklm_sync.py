@@ -2,11 +2,18 @@
 
 import asyncio
 import logging
+import os
+import platform
 import re
+import shutil
+import subprocess
 from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
 from typing import List, Optional
+from urllib.parse import urlparse
+
+import requests
 
 from app.config import settings
 from app.database.models import get_notebook_by_date, save_or_update_notebook
@@ -36,14 +43,14 @@ class NotebookLMSyncService:
 
     透過 Chrome CDP（Chrome DevTools Protocol）連接到使用者已開啟的 Chrome 瀏覽器，
     自動化上傳摘要文字與媒體檔案到 NotebookLM。
-    按日期分組：每日一個 Notebook，命名 "Instagram Reels - {YYYY-MM-DD}"。
+    按日期分組：每日一個 Notebook，命名 "IG Content - {YYYY-MM-DD}"。
 
     使用方式：
-    1. 啟動 Chrome 並開啟 remote debugging:
-       chrome.exe --remote-debugging-port=9222 --user-data-dir="C:\\chrome-cdp-profile"
-    2. 在該 Chrome 視窗中登入 Google 帳號（只需要一次）
-    3. 設定 NOTEBOOKLM_ENABLED=true
+    1. 設定 NOTEBOOKLM_ENABLED=true
+    2. Chrome 會在需要時自動啟動（含 remote debugging）
+    3. 首次使用：在自動開啟的 Chrome 視窗中登入 Google 帳號
     4. 設定 NOTEBOOKLM_CDP_URL=http://localhost:9222（預設值）
+    5. 可選：設定 NOTEBOOKLM_CHROME_PROFILE 指定 Chrome 使用者資料目錄
     """
 
     def __init__(self):
@@ -52,14 +59,151 @@ class NotebookLMSyncService:
         self._playwright = None
         self._browser = None
         self._context = None
+        self._chrome_process = None  # 由本服務啟動的 Chrome 程序
+
+    # ==================== Chrome CDP 自動啟動 ====================
+
+    @staticmethod
+    def _find_chrome_executable() -> Optional[str]:
+        """在系統中尋找 Chrome 執行檔"""
+        # Windows 常見路徑
+        if platform.system() == "Windows":
+            candidates = [
+                os.path.join(os.environ.get("PROGRAMFILES", ""), "Google", "Chrome", "Application", "chrome.exe"),
+                os.path.join(os.environ.get("PROGRAMFILES(X86)", ""), "Google", "Chrome", "Application", "chrome.exe"),
+                os.path.join(os.environ.get("LOCALAPPDATA", ""), "Google", "Chrome", "Application", "chrome.exe"),
+            ]
+            for c in candidates:
+                if c and os.path.isfile(c):
+                    return c
+        else:
+            # macOS / Linux
+            for name in ["google-chrome", "google-chrome-stable", "chromium-browser", "chromium"]:
+                path = shutil.which(name)
+                if path:
+                    return path
+            # macOS 常見路徑
+            mac_path = "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome"
+            if os.path.isfile(mac_path):
+                return mac_path
+
+        return None
+
+    def _get_cdp_port(self) -> int:
+        """從 cdp_url 提取 port"""
+        parsed = urlparse(self.cdp_url)
+        return parsed.port or 9222
+
+    def _get_chrome_profile_dir(self) -> str:
+        """取得 Chrome CDP 專用 user-data-dir"""
+        if settings.notebooklm_chrome_profile:
+            return settings.notebooklm_chrome_profile
+        return os.path.join(os.path.expanduser("~"), ".chrome-cdp-notebooklm")
+
+    def _is_cdp_running(self) -> bool:
+        """檢查 CDP 是否已執行中"""
+        port = self._get_cdp_port()
+        try:
+            resp = requests.get(f"http://localhost:{port}/json/version", timeout=2)
+            return resp.status_code == 200
+        except Exception:
+            return False
+
+    def _start_chrome_cdp(self) -> bool:
+        """
+        自動啟動 Chrome 並開啟 remote debugging
+
+        Returns:
+            True 表示啟動成功，False 表示失敗
+        """
+        chrome_path = self._find_chrome_executable()
+        if not chrome_path:
+            logger.warning("找不到 Chrome 執行檔，無法自動啟動 CDP")
+            return False
+
+        port = self._get_cdp_port()
+        profile_dir = self._get_chrome_profile_dir()
+
+        logger.info(f"正在自動啟動 Chrome CDP (port={port}, profile={profile_dir})...")
+
+        try:
+            args = [
+                chrome_path,
+                f"--remote-debugging-port={port}",
+                f"--user-data-dir={profile_dir}",
+                "--no-first-run",
+                "--no-default-browser-check",
+                NOTEBOOKLM_BASE_URL,
+            ]
+
+            # 使用 subprocess.Popen 在背景啟動（不等待結束）
+            if platform.system() == "Windows":
+                self._chrome_process = subprocess.Popen(
+                    args,
+                    stdout=subprocess.DEVNULL,
+                    stderr=subprocess.DEVNULL,
+                    creationflags=subprocess.DETACHED_PROCESS | subprocess.CREATE_NO_WINDOW,
+                )
+            else:
+                self._chrome_process = subprocess.Popen(
+                    args,
+                    stdout=subprocess.DEVNULL,
+                    stderr=subprocess.DEVNULL,
+                    start_new_session=True,
+                )
+
+            logger.info(f"Chrome 已啟動 (PID={self._chrome_process.pid})，等待 CDP 就緒...")
+            return True
+
+        except Exception as e:
+            logger.error(f"啟動 Chrome 失敗: {e}")
+            return False
+
+    async def _wait_for_cdp_ready(self, timeout: int = 15) -> bool:
+        """
+        等待 CDP 端口就緒
+
+        Args:
+            timeout: 最大等待秒數
+
+        Returns:
+            True 表示 CDP 已就緒
+        """
+        for i in range(timeout):
+            if self._is_cdp_running():
+                logger.info(f"Chrome CDP 已就緒 (等待 {i + 1} 秒)")
+                return True
+            await asyncio.sleep(1)
+
+        logger.error(f"Chrome CDP 在 {timeout} 秒內未就緒")
+        return False
+
+    # ==================== 瀏覽器連線 ====================
 
     async def _launch_browser(self) -> bool:
-        """透過 CDP 連接到使用者已開啟的 Chrome 瀏覽器"""
+        """透過 CDP 連接到 Chrome，若未啟動則自動啟動"""
         try:
             from playwright.async_api import async_playwright
 
             if self._playwright is None:
                 self._playwright = await async_playwright().start()
+
+            # 先檢查 CDP 是否已在執行
+            if not self._is_cdp_running():
+                logger.warning("Chrome CDP 未執行，嘗試自動啟動...")
+                started = self._start_chrome_cdp()
+                if not started:
+                    logger.error(
+                        "無法自動啟動 Chrome。"
+                        f"請手動執行: chrome --remote-debugging-port={self._get_cdp_port()} "
+                        f'--user-data-dir="{self._get_chrome_profile_dir()}"'
+                    )
+                    return False
+
+                # 等待 CDP 就緒
+                ready = await self._wait_for_cdp_ready(timeout=15)
+                if not ready:
+                    return False
 
             self._browser = await self._playwright.chromium.connect_over_cdp(
                 self.cdp_url
@@ -165,7 +309,7 @@ class NotebookLMSyncService:
         Returns:
             Notebook URL 或 None
         """
-        notebook_title = f"Instagram Reels - {date_str}"
+        notebook_title = f"IG Content - {date_str}"
 
         # 查詢 DB 是否已有今日 notebook
         existing = await get_notebook_by_date(date_str)
@@ -737,7 +881,7 @@ class NotebookLMSyncService:
                             await self._upload_files_source(page, valid_paths, notebook_url)
 
                     # 更新 DB 中的 source 計數
-                    notebook_title = f"Instagram Reels - {today_str}"
+                    notebook_title = f"IG Content - {today_str}"
                     await save_or_update_notebook(
                         date_str=today_str,
                         notebook_url=notebook_url,

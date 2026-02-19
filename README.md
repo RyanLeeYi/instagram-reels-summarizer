@@ -36,7 +36,7 @@
 | 📱 **Telegram Bot 整合** | 直接分享連結即可處理 | python-telegram-bot |
 | 🎬 **Instagram Reels 下載** | 下載 Reels 影片並轉錄 | yt-dlp + cookies.txt |
 | 🖼️ **Instagram 圖文貼文** | 下載多圖 Carousel 貼文 | Instaloader |
-| 🧵 **Threads 支援** | 下載 Threads 貼文（含回覆串） | Threads API |
+| 🧵 **Threads 支援** | 下載 Threads 貼文與串文（自動偵測作者連續貼文） | Googlebot SSR + Threads API |
 | 🎤 **語音轉錄** | 本地語音轉文字（免費、無需 API Key） | faster-whisper |
 | 👁️ **視覺分析** | 分析影片畫面（動態 8-10 幀、並行處理） | Gemma3 / MiniCPM-V |
 | 📝 **AI 摘要** | 整合語音與畫面生成繁體中文摘要 | Ollama / Claude CLI / Copilot CLI |
@@ -523,7 +523,7 @@ curl -X POST "http://localhost:8000/webhook/setup?webhook_url=https://your-tunne
       • 🤖 NotebookLM 連結（如啟用）
 ```
 
-### Threads 貼文
+### Threads 貼文 / 串文
 
 ```
 1. 🧵 在 Threads App 找到想要摘要的貼文
@@ -532,11 +532,15 @@ curl -X POST "http://localhost:8000/webhook/setup?webhook_url=https://your-tunne
 2. 📤 複製連結，發送給 Telegram Bot
          │
          ▼
-3. ⏳ Bot 自動下載文字、圖片、回覆串
+3. ⏳ Bot 自動下載文字、圖片、影片
+   ├── 單一貼文：直接處理
+   └── 串文（作者多則連續貼文）：自動偵測並合併
          │
          ▼
 4. ✅ 處理完成，Bot 回覆完整摘要
 ```
+
+> **串文支援**：當作者以多則連續貼文發佈內容時（串文），系統會透過 Googlebot SSR 自動偵測並合併所有作者的貼文，排除其他人的回覆。每則貼文中的圖片與影片也會一併下載分析。
 
 ### 輸出範例
 
@@ -588,7 +592,7 @@ instagram-reels-summarizer/
 │   │   └── telegram_handler.py  # Telegram Bot 訊息處理
 │   ├── 📁 services/
 │   │   ├── downloader.py        # Instagram 下載 (yt-dlp + Instaloader)
-│   │   ├── threads_downloader.py # Threads 貼文下載
+│   │   ├── threads_downloader.py # Threads 貼文/串文下載（API + Googlebot SSR）
 │   │   ├── download_logger.py   # 下載記錄（大小與連結）
 │   │   ├── transcriber.py       # 語音轉錄 (faster-whisper)
 │   │   ├── visual_analyzer.py   # 視覺分析 (Ollama + Vision Model)
@@ -912,6 +916,7 @@ python scripts/test_flow_visual.py   # 完整流程測試
 
 | 日期 | 版本 | 更新內容 |
 |------|------|---------|
+| 2026-02-19 | v1.7.0 | Threads 串文支援（Googlebot SSR 自動偵測作者連續貼文、過濾回覆） |
 | 2026-02-17 | v1.6.0 | NotebookLM 多圖批次上傳（一次多選）、頁面跳轉修復 |
 | 2026-02-16 | v1.5.0 | NotebookLM 改用 Chrome CDP 連線、獨立 Profile、Notebook 自動偵測 |
 | 2026-02-10 | v1.4.0 | 新增 Instagram 圖文貼文支援、Threads 貼文支援、NotebookLM 同步 |

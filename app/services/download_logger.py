@@ -184,6 +184,82 @@ class DownloadLogger:
         )
         return entry
     
+    def log_threads_download(
+        self,
+        threads_url: str,
+        title: Optional[str] = None,
+        image_paths: Optional[List[Path]] = None,
+        video_paths: Optional[List[Path]] = None,
+        audio_paths: Optional[List[Path]] = None,
+        content_type: str = "threads",
+    ) -> DownloadLogEntry:
+        """
+        記錄 Threads 貼文下載
+        
+        Args:
+            threads_url: Threads 連結
+            title: 貼文標題（通常為 @author）
+            image_paths: 圖片路徑列表
+            video_paths: 影片路徑列表
+            audio_paths: 音訊路徑列表
+            content_type: 內容類型（threads 或 threads_conversation）
+            
+        Returns:
+            DownloadLogEntry: 記錄條目
+        """
+        image_sizes = []
+        video_size = 0
+        audio_size = 0
+        total_size = 0
+        
+        if image_paths:
+            for path in image_paths:
+                if path.exists():
+                    size = path.stat().st_size
+                    image_sizes.append(size)
+                    total_size += size
+        
+        if video_paths:
+            for path in video_paths:
+                if path.exists():
+                    size = path.stat().st_size
+                    video_size += size
+                    total_size += size
+        
+        if audio_paths:
+            for path in audio_paths:
+                if path.exists():
+                    size = path.stat().st_size
+                    audio_size += size
+                    total_size += size
+        
+        entry = DownloadLogEntry(
+            timestamp=datetime.now().isoformat(),
+            instagram_url=threads_url,
+            content_type=content_type,
+            title=title,
+            video_size_bytes=video_size if video_size > 0 else None,
+            audio_size_bytes=audio_size if audio_size > 0 else None,
+            image_sizes_bytes=image_sizes if image_sizes else None,
+            total_size_bytes=total_size if total_size > 0 else None,
+        )
+        
+        self._save_entry(entry)
+        media_counts = []
+        if image_paths:
+            media_counts.append(f"{len(image_paths)} 張圖片")
+        if video_paths:
+            media_counts.append(f"{len(video_paths)} 個影片")
+        if audio_paths:
+            media_counts.append(f"{len(audio_paths)} 個音訊")
+        media_info = ", ".join(media_counts) if media_counts else "純文字"
+        logger.info(
+            f"已記錄 Threads 下載: {threads_url} | "
+            f"媒體: {media_info} | "
+            f"總大小: {self.format_size(entry.total_size_bytes)}"
+        )
+        return entry
+
     def _save_entry(self, entry: DownloadLogEntry) -> None:
         """儲存記錄條目到 JSON 和 CSV"""
         # 儲存到 JSON
@@ -242,11 +318,15 @@ class DownloadLogger:
         
         total_reels = 0
         total_posts = 0
+        total_threads = 0
         total_size = 0
         
         for log in logs:
-            if log.get("content_type") == "reel":
+            content_type = log.get("content_type", "")
+            if content_type == "reel":
                 total_reels += 1
+            elif content_type.startswith("threads"):
+                total_threads += 1
             else:
                 total_posts += 1
             
@@ -257,6 +337,7 @@ class DownloadLogger:
             "total_downloads": len(logs),
             "total_reels": total_reels,
             "total_posts": total_posts,
+            "total_threads": total_threads,
             "total_size_bytes": total_size,
             "total_size_readable": self.format_size(total_size),
         }

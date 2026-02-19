@@ -1,5 +1,6 @@
 """Telegram Bot 處理器"""
 
+import hashlib
 import logging
 import re
 from typing import Optional
@@ -72,6 +73,8 @@ class TelegramBotHandler:
         self._processed_message_ids: set[int] = set()
         # 用於暫存待確認的筆記
         self._pending_notes: dict = {}
+        # 用於 reprocess callback_data 的 URL 映射（避免超過 Telegram 64-byte 限制）
+        self._reprocess_urls: dict[str, str] = {}
 
     def _is_authorized(self, chat_id: str) -> bool:
         """檢查使用者是否有權限使用 Bot"""
@@ -276,9 +279,11 @@ class TelegramBotHandler:
             existing = await check_url_processed(threads_url)
             if existing:
                 logger.info(f"URL 已處理過: {threads_url}")
+                reprocess_key = hashlib.md5(threads_url.encode()).hexdigest()[:12]
+                self._reprocess_urls[reprocess_key] = threads_url
                 keyboard = [
                     [
-                        InlineKeyboardButton("🔄 重新處理", callback_data=f"reprocess:{threads_url}"),
+                        InlineKeyboardButton("🔄 重新處理", callback_data=f"reprocess:{reprocess_key}"),
                         InlineKeyboardButton("⏭ 跳過", callback_data="skip"),
                     ]
                 ]
@@ -320,9 +325,11 @@ class TelegramBotHandler:
         existing = await check_url_processed(instagram_url)
         if existing:
             logger.info(f"URL 已處理過: {instagram_url}")
+            reprocess_key = hashlib.md5(instagram_url.encode()).hexdigest()[:12]
+            self._reprocess_urls[reprocess_key] = instagram_url
             keyboard = [
                 [
-                    InlineKeyboardButton("🔄 重新處理", callback_data=f"reprocess:{instagram_url}"),
+                    InlineKeyboardButton("🔄 重新處理", callback_data=f"reprocess:{reprocess_key}"),
                     InlineKeyboardButton("⏭ 跳過", callback_data="skip"),
                 ]
             ]
@@ -419,14 +426,24 @@ class TelegramBotHandler:
                     else:
                         logger.warning(f"視覺分析失敗: {visual_result.error_message}")
 
-                # 檢查：如果語音和視覺分析都失敗，回報錯誤
-                if not transcript and not visual_description:
-                    error_msg = "此影片無可辨識的語音內容，且視覺分析也失敗"
+                # 檢查：如果語音、視覺分析和貼文說明都沒有，回報錯誤
+                has_caption = bool(video_caption and video_caption.strip())
+                if not transcript and not visual_description and not has_caption:
+                    error_msg = "此影片無可辨識的語音內容，視覺分析也失敗，且無貼文說明"
                     await self._save_failed_task(
                         instagram_url, chat_id, ErrorType.TRANSCRIBE, error_msg
                     )
                     await self._safe_edit_message(processing_message, f"❌ 處理失敗\n\n{error_msg}")
                     return
+                
+                # 如果逐字稿為空但有貼文說明或視覺分析，記錄 fallback 資訊
+                if not transcript and (has_caption or visual_description):
+                    fallback_sources = []
+                    if visual_description:
+                        fallback_sources.append("視覺分析")
+                    if has_caption:
+                        fallback_sources.append("貼文說明")
+                    logger.info(f"逐字稿為空，將使用 {' + '.join(fallback_sources)} 進行摘要")
 
                 # 步驟 3: 使用 LLM 生成完整 Markdown 筆記
                 await self._safe_edit_message(processing_message, "⏳ 生成筆記中...")
@@ -695,6 +712,8 @@ class TelegramBotHandler:
             # 取得作者名稱
             if download_result.content_type == "single_post" and download_result.post:
                 author = download_result.post.author_username
+            elif download_result.content_type == "thread" and download_result.thread_posts:
+                author = download_result.thread_posts[0].author_username
             elif download_result.conversation:
                 author = download_result.conversation.parent_post.author_username
             else:
@@ -704,7 +723,13 @@ class TelegramBotHandler:
             formatted_content = self.threads_downloader.format_for_summary(download_result)
 
             if not formatted_content:
-                await self._safe_edit_message(processing_message, "❌ 無法取得串文內容")
+                await self._save_failed_task(
+                    threads_url, chat_id, ErrorType.DOWNLOAD, "無法取得串文內容"
+                )
+                await self._safe_edit_message(
+                    processing_message,
+                    "❌ 無法取得串文內容\n\n已排入重試佇列。"
+                )
                 return
 
             # 步驟 3: 下載並分析媒體（如果有）
@@ -712,6 +737,16 @@ class TelegramBotHandler:
             transcript = None
 
             all_media = self.threads_downloader.get_all_media(download_result)
+
+            # 記錄下載資訊
+            content_log_type_map = {
+                "thread_conversation": "threads_conversation",
+                "thread": "threads_thread",
+                "single_post": "threads",
+            }
+            content_log_type = content_log_type_map.get(
+                download_result.content_type, "threads"
+            )
             if all_media:
                 await self._safe_edit_message(
                     processing_message,
@@ -760,6 +795,23 @@ class TelegramBotHandler:
 
                     if visual_parts:
                         visual_description = "\n\n".join(visual_parts)
+
+                    # 記錄 Threads 下載（含媒體大小）
+                    self.download_logger.log_threads_download(
+                        threads_url=threads_url,
+                        title=f"@{author}",
+                        image_paths=media_download_result.image_paths,
+                        video_paths=media_download_result.video_paths,
+                        audio_paths=media_download_result.audio_paths,
+                        content_type=content_log_type,
+                    )
+            else:
+                # 純文字 Threads，無媒體
+                self.download_logger.log_threads_download(
+                    threads_url=threads_url,
+                    title=f"@{author}",
+                    content_type=content_log_type,
+                )
 
             # 步驟 4: 使用 LLM 生成筆記
             await self._safe_edit_message(processing_message, "⏳ 生成筆記中...")
@@ -820,6 +872,11 @@ class TelegramBotHandler:
 
             # 構建回覆訊息
             has_media = bool(all_media)
+            thread_count = (
+                len(download_result.thread_posts)
+                if download_result.content_type == "thread"
+                else 0
+            )
             reply_message = self._format_threads_reply(
                 author=author,
                 summary=note_result.summary,
@@ -830,6 +887,7 @@ class TelegramBotHandler:
                 reply_count=len(download_result.conversation.replies) if download_result.conversation else 0,
                 has_media=has_media,
                 notebooklm_result=notebooklm_result,
+                thread_count=thread_count,
             )
 
             await self._safe_edit_message(processing_message, reply_message)
@@ -867,6 +925,7 @@ class TelegramBotHandler:
         reply_count: int = 0,
         has_media: bool = False,
         notebooklm_result=None,
+        thread_count: int = 0,
     ) -> str:
         """格式化 Threads 回覆訊息"""
         # 重點列表
@@ -874,7 +933,9 @@ class TelegramBotHandler:
 
         # 內容類型說明
         type_info_parts = []
-        if content_type == "thread_conversation" and reply_count > 0:
+        if content_type == "thread" and thread_count > 1:
+            type_info_parts.append(f"串文 {thread_count} 則")
+        elif content_type == "thread_conversation" and reply_count > 0:
             type_info_parts.append(f"含 {reply_count} 則回覆")
         if has_media:
             type_info_parts.append("含媒體")
@@ -1117,7 +1178,11 @@ class TelegramBotHandler:
             return
 
         if data.startswith("reprocess:"):
-            url = data[len("reprocess:"):]
+            reprocess_key = data[len("reprocess:"):]
+            url = self._reprocess_urls.pop(reprocess_key, None)
+            if not url:
+                await query.edit_message_text("⚠️ 重新處理請求已過期，請重新傳送連結。")
+                return
             chat_id = str(update.effective_chat.id)
 
             # 先刪除舊的處理紀錄
