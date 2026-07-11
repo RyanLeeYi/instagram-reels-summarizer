@@ -18,5 +18,5 @@
 ## 下一步（具體到可直接動手）
 
 1. ~~F1 重驗~~ ✅ 2026-07-11 20:04 e2e 全通（F1、F6 隨之 passing）
-2. **F7 NotebookLM 確認壞損**：UI 改版找不到 'Add source' 按鈕——log（20:02:43）有現行按鈕清單，照著更新 notebooklm_sync.py 的 selector；建議順便把「emoji-keyboard」等雜訊按鈕過濾掉
+2. ~~F7 NotebookLM~~ ✅ 已修並實證（UI 改版成 tab 佈局，_click_add_source 先切「來源」tab；20:02 失敗的摘要已補傳，notebook 1 個來源）。**待確認**：檔案上傳路徑同修但未實測——下支 reel 的 log 看 `_upload_files_source` 有沒有過
 3. 依序重驗 F2（圖文）、F3（Threads）、F4（重複 URL，把同一條 reel 再傳一次最快）——各傳一條真實連結即可

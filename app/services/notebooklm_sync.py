@@ -683,6 +683,27 @@ class NotebookLMSyncService:
             # 等待頁面完全載入
             await page.wait_for_timeout(3000)
 
+            # add-source 對話框可能已經開著（新 Notebook 自動開）——有選項就不用再點
+            dialog_open = page.locator(
+                'button:has-text("複製的文字"), '
+                'button:has-text("Copied text"), '
+                'button:has-text("上傳檔案")'
+            )
+            if await dialog_open.count() > 0:
+                logger.debug("add-source 對話框已開啟，跳過點擊")
+                return True
+
+            # 2026-07 UI 改版：視窗 < 約 1280px 時來源面板收進 tab（來源/對話/工作室），
+            # 「新增來源」按鈕只在「來源」tab 內存在——先切過去
+            src_tab = page.locator(
+                '[role="tab"]:has-text("來源"), [role="tab"]:has-text("Sources")'
+            )
+            if await src_tab.count() > 0:
+                if (await src_tab.first.get_attribute("aria-selected")) != "true":
+                    await src_tab.first.click(force=True)
+                    await page.wait_for_timeout(1500)
+                    logger.debug("已切換到「來源」tab")
+
             # 先關閉任何 CDK overlay backdrop（Angular Material 的遮罩層會攔截點擊）
             await page.evaluate("""() => {
                 // 移除所有 CDK overlay backdrop
