@@ -62,7 +62,14 @@ class Settings(BaseSettings):
     threads_fetch_replies: bool = Field(default=True, env="THREADS_FETCH_REPLIES")
     threads_max_replies: int = Field(default=50, env="THREADS_MAX_REPLIES")
 
-    # NotebookLM 設定 (Chrome CDP 連線)
+    # 知識庫（Obsidian vault）整併設定 — 取代 NotebookLM（docs/prd/vault-sync.md）
+    vault_sync_enabled: bool = Field(default=True, env="VAULT_SYNC_ENABLED")
+    vault_path: str = Field(
+        default=r"C:\Users\user\OneDrive\Desktop\Obsidian", env="VAULT_PATH"
+    )
+    vault_link_enrich: bool = Field(default=True, env="VAULT_LINK_ENRICH")
+
+    # NotebookLM 設定 (Chrome CDP 連線)——已被 vault sync 取代，保留程式碼備用
     notebooklm_enabled: bool = Field(default=False, env="NOTEBOOKLM_ENABLED")
     notebooklm_cdp_url: str = Field(default="http://localhost:9222", env="NOTEBOOKLM_CDP_URL")
     notebooklm_upload_video: bool = Field(default=True, env="NOTEBOOKLM_UPLOAD_VIDEO")

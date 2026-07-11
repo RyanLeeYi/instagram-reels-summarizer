@@ -1,6 +1,12 @@
 # Session Handoff
 
-> 最後更新：2026-07-11
+> 最後更新：2026-07-11（第五場：F14 vault 整併）
+
+## 最新：F14 摘要整併知識庫（差最後一步）
+
+- NotebookLM 換成直接寫 Obsidian vault（`docs/prd/vault-sync.md`）：clippings/ 寫入 + INDEX 自動同步 + 圖片進 assets/clippings/ + LLM 連結 pass（claude CLI，輸出驗證後才 append）
+- 直呼 e2e 已過（真摘要入庫、INDEX 有條目、連結 pass 跑通）；`NOTEBOOKLM_ENABLED=false`
+- **待辦：Ryan 傳任一連結走 bot 全程**（回覆應含「📚 知識庫」段）→ F14 改 passing
 
 ## 這個 session 做了
 

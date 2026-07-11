@@ -28,7 +28,8 @@ from app.services.summarizer_factory import get_summarizer
 from app.services.roam_sync import RoamSyncService
 from app.services.visual_analyzer import VideoVisualAnalyzer
 from app.services.download_logger import DownloadLogger
-from app.services.notebooklm_sync import NotebookLMSyncService, NotebookLMResult
+from app.services.notebooklm_sync import NotebookLMSyncService, NotebookLMResult  # noqa: F401 保留備用
+from app.services.vault_sync import VaultSyncService
 from app.database.models import (
     FailedTask,
     ErrorType,
@@ -67,6 +68,9 @@ class TelegramBotHandler:
         self.download_logger = DownloadLogger()
         self.notebooklm_sync: Optional[NotebookLMSyncService] = (
             NotebookLMSyncService() if settings.notebooklm_enabled else None
+        )
+        self.vault_sync: Optional[VaultSyncService] = (
+            VaultSyncService() if settings.vault_sync_enabled else None
         )
         self.application: Optional[Application] = None
         # 用於防止重複處理同一訊息
@@ -474,28 +478,25 @@ class TelegramBotHandler:
                     )
                     return
 
-                # 步驟 4: 上傳到 NotebookLM（如果啟用）— 先於 Roam 儲存，以便將連結寫入筆記
-                notebooklm_result = None
-                if self.notebooklm_sync:
+                # 步驟 4: 寫入知識庫（vault，如果啟用）
+                vault_result = None
+                if self.vault_sync:
                     try:
-                        await self._safe_edit_message(processing_message, "⏳ 上傳到 NotebookLM...")
-                        notebooklm_result = await self.notebooklm_sync.upload_reel(
+                        await self._safe_edit_message(processing_message, "⏳ 寫入知識庫...")
+                        vault_result = await self.vault_sync.upload_reel(
                             markdown_content=note_result.markdown_content,
-                            video_path=video_path,
                             title=video_title,
+                            source_url=instagram_url,
                         )
-                        if not notebooklm_result.success:
-                            logger.warning(f"NotebookLM 上傳失敗: {notebooklm_result.error_message}")
+                        if not vault_result.success:
+                            logger.warning(f"知識庫寫入失敗: {vault_result.error_message}")
                     except Exception as e:
-                        logger.warning(f"NotebookLM 上傳過程發生錯誤: {e}")
+                        logger.warning(f"知識庫寫入過程發生錯誤: {e}")
 
-                # 步驟 5: 儲存 LLM 生成的 Markdown 筆記（包含 NotebookLM 連結）
-                markdown_for_roam = self._inject_nlm_link(
-                    note_result.markdown_content, notebooklm_result
-                )
+                # 步驟 5: 儲存 LLM 生成的 Markdown 筆記
                 roam_result = await self.roam_sync.save_markdown_note(
                     video_title=video_title,
-                    markdown_content=markdown_for_roam,
+                    markdown_content=note_result.markdown_content,
                 )
 
                 if not roam_result.success:
@@ -510,7 +511,7 @@ class TelegramBotHandler:
                     bullet_points=note_result.bullet_points,
                     roam_result=roam_result,
                     instagram_url=instagram_url,
-                    notebooklm_result=notebooklm_result,
+                    vault_result=vault_result,
                 )
 
                 await self._safe_edit_message(processing_message, reply_message)
@@ -622,28 +623,26 @@ class TelegramBotHandler:
                     )
                     return
                 
-                # 步驟 4: 上傳到 NotebookLM（如果啟用）— 先於 Roam 儲存，以便將連結寫入筆記
-                notebooklm_result = None
-                if self.notebooklm_sync:
+                # 步驟 4: 寫入知識庫（vault，如果啟用）——含圖片進 assets
+                vault_result = None
+                if self.vault_sync:
                     try:
-                        await self._safe_edit_message(processing_message, "⏳ 上傳到 NotebookLM...")
-                        notebooklm_result = await self.notebooklm_sync.upload_post(
+                        await self._safe_edit_message(processing_message, "⏳ 寫入知識庫...")
+                        vault_result = await self.vault_sync.upload_post(
                             markdown_content=note_result.markdown_content,
                             image_paths=image_paths,
                             title=post_title,
+                            source_url=instagram_url,
                         )
-                        if not notebooklm_result.success:
-                            logger.warning(f"NotebookLM 上傳失敗: {notebooklm_result.error_message}")
+                        if not vault_result.success:
+                            logger.warning(f"知識庫寫入失敗: {vault_result.error_message}")
                     except Exception as e:
-                        logger.warning(f"NotebookLM 上傳過程發生錯誤: {e}")
-                
-                # 步驟 5: 儲存 LLM 生成的 Markdown 筆記（包含 NotebookLM 連結 + 原始貼文文字）
-                markdown_for_roam = self._inject_nlm_link(
-                    note_result.markdown_content, notebooklm_result
-                )
+                        logger.warning(f"知識庫寫入過程發生錯誤: {e}")
+
+                # 步驟 5: 儲存 LLM 生成的 Markdown 筆記（含原始貼文文字）
                 roam_result = await self.roam_sync.save_post_note(
                     post_title=post_title,
-                    markdown_content=markdown_for_roam,
+                    markdown_content=note_result.markdown_content,
                     caption=caption,
                 )
                 
@@ -659,9 +658,9 @@ class TelegramBotHandler:
                     bullet_points=note_result.bullet_points,
                     roam_result=roam_result,
                     instagram_url=instagram_url,
-                    notebooklm_result=notebooklm_result,
+                    vault_result=vault_result,
                 )
-                
+
                 await self._safe_edit_message(processing_message, reply_message)
                 
                 # 儲存已處理的 URL
@@ -834,33 +833,29 @@ class TelegramBotHandler:
                 )
                 return
 
-            # 步驟 5: 上傳到 NotebookLM（如果啟用）— 先於 Roam 儲存，以便將連結寫入筆記
-            notebooklm_result = None
-            if self.notebooklm_sync:
+            # 步驟 5: 寫入知識庫（vault，如果啟用）——media 中僅圖片進 assets
+            vault_result = None
+            if self.vault_sync:
                 try:
-                    await self._safe_edit_message(processing_message, "⏳ 上傳到 NotebookLM...")
-                    # 收集所有媒體路徑
+                    await self._safe_edit_message(processing_message, "⏳ 寫入知識庫...")
                     media_paths = []
                     if media_download_result:
                         media_paths.extend(media_download_result.image_paths or [])
-                        media_paths.extend(media_download_result.video_paths or [])
-                    notebooklm_result = await self.notebooklm_sync.upload_threads(
+                    vault_result = await self.vault_sync.upload_threads(
                         markdown_content=note_result.markdown_content,
                         media_paths=media_paths if media_paths else None,
                         title=f"@{author}",
+                        source_url=threads_url,
                     )
-                    if not notebooklm_result.success:
-                        logger.warning(f"NotebookLM 上傳失敗: {notebooklm_result.error_message}")
+                    if not vault_result.success:
+                        logger.warning(f"知識庫寫入失敗: {vault_result.error_message}")
                 except Exception as e:
-                    logger.warning(f"NotebookLM 上傳過程發生錯誤: {e}")
+                    logger.warning(f"知識庫寫入過程發生錯誤: {e}")
 
-            # 步驟 6: 儲存筆記到 Roam（包含 NotebookLM 連結）
-            markdown_for_roam = self._inject_nlm_link(
-                note_result.markdown_content, notebooklm_result
-            )
+            # 步驟 6: 儲存筆記到 Roam
             roam_result = await self.roam_sync.save_threads_note(
                 author=author,
-                markdown_content=markdown_for_roam,
+                markdown_content=note_result.markdown_content,
                 original_url=threads_url,
             )
 
@@ -886,7 +881,7 @@ class TelegramBotHandler:
                 content_type=download_result.content_type,
                 reply_count=len(download_result.conversation.replies) if download_result.conversation else 0,
                 has_media=has_media,
-                notebooklm_result=notebooklm_result,
+                vault_result=vault_result,
                 thread_count=thread_count,
             )
 
@@ -924,7 +919,7 @@ class TelegramBotHandler:
         content_type: str = "single_post",
         reply_count: int = 0,
         has_media: bool = False,
-        notebooklm_result=None,
+        vault_result=None,
         thread_count: int = 0,
     ) -> str:
         """格式化 Threads 回覆訊息"""
@@ -947,10 +942,10 @@ class TelegramBotHandler:
         else:
             roam_section = "📎 筆記儲存\n⚠️ 儲存失敗，已排入重試佇列"
 
-        # NotebookLM 連結部分
+        # 知識庫入庫部分
         nlm_section = ""
-        if notebooklm_result and notebooklm_result.success and notebooklm_result.notebook_url:
-            nlm_section = f"\n🤖 NotebookLM\n{notebooklm_result.notebook_url}\n"
+        if vault_result and vault_result.success and vault_result.note_name:
+            nlm_section = f"\n📚 知識庫\n{vault_result.note_name}\n"
 
         return f"""✅ Threads 筆記生成完成！{type_info}
 
@@ -1053,7 +1048,7 @@ class TelegramBotHandler:
         bullet_points: list,
         roam_result,
         instagram_url: str,
-        notebooklm_result=None,
+        vault_result=None,
     ) -> str:
         """格式化簡潔版回覆訊息（用於 LLM 生成筆記模式）"""
         # 重點列表
@@ -1067,10 +1062,10 @@ class TelegramBotHandler:
         else:
             roam_section = "📎 筆記儲存\n⚠️ 儲存失敗，已排入重試佇列"
 
-        # NotebookLM 連結部分
+        # 知識庫入庫部分
         nlm_section = ""
-        if notebooklm_result and notebooklm_result.success and notebooklm_result.notebook_url:
-            nlm_section = f"\n🤖 NotebookLM\n{notebooklm_result.notebook_url}\n"
+        if vault_result and vault_result.success and vault_result.note_name:
+            nlm_section = f"\n📚 知識庫\n{vault_result.note_name}\n"
 
         return f"""✅ 筆記生成完成！
 
