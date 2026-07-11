@@ -17,6 +17,6 @@
 
 ## 下一步（具體到可直接動手）
 
-1. Ryan 重傳 reel → F1 收 evidence 改 passing
-2. 依序重驗 F2（圖文）、F3（Threads）、F4（重複 URL）——各傳一條真實連結即可
-3. F6/F7 重驗前先確認環境：CLAUDE_CODE_SYNC_ENABLED / NOTEBOOKLM_ENABLED 現值與 CDP Chrome 是否要開
+1. ~~F1 重驗~~ ✅ 2026-07-11 20:04 e2e 全通（F1、F6 隨之 passing）
+2. **F7 NotebookLM 確認壞損**：UI 改版找不到 'Add source' 按鈕——log（20:02:43）有現行按鈕清單，照著更新 notebooklm_sync.py 的 selector；建議順便把「emoji-keyboard」等雜訊按鈕過濾掉
+3. 依序重驗 F2（圖文）、F3（Threads）、F4（重複 URL，把同一條 reel 再傳一次最快）——各傳一條真實連結即可
