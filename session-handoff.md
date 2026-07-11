@@ -19,4 +19,6 @@
 
 1. ~~F1 重驗~~ ✅ 2026-07-11 20:04 e2e 全通（F1、F6 隨之 passing）
 2. ~~F7 NotebookLM~~ ✅ 已修並實證（UI 改版成 tab 佈局，_click_add_source 先切「來源」tab；20:02 失敗的摘要已補傳，notebook 1 個來源）。**待確認**：檔案上傳路徑同修但未實測——下支 reel 的 log 看 `_upload_files_source` 有沒有過
-3. 依序重驗 F2（圖文）、F3（Threads）、F4（重複 URL，把同一條 reel 再傳一次最快）——各傳一條真實連結即可
+3. ~~F3 / F4 重驗~~ ✅ 2026-07-11 20:22–20:25 實測過（F3 走 Googlebot SSR fallback；F7 修復在正式流程也驗證了）
+4. **F2 卡在 cookies**：Ryan 從已登入 IG 的瀏覽器重新匯出 cookies.txt（Netscape 格式、必須含 sessionid，放 repo 根目錄直接覆蓋）→ 等幾分鐘避開 rate limit → 重傳 p/DaSd-YuD_x8 驗證。注意：**匯出後別在瀏覽器登出**（會作廢 sessionid）
+5. F12：把 instaloader 未登入的 NoneType 錯誤映射成可行動訊息（TDD）
