@@ -35,7 +35,7 @@
 ### F14-e 接線與容錯
 
 - `telegram_handler` 三個 NotebookLM 呼叫點換成 `vault_sync.upload_reel/upload_post/upload_threads`（介面形狀對齊 NotebookLMSyncService，另加 `source_url` 參數）
-- Telegram 回覆的 NotebookLM 連結段換成 `📚 知識庫: <檔名>`
+- Telegram 回覆的 NotebookLM 連結段換成「`📚 知識庫`＋換行＋檔名」（與 Roam 段同風格；2026-07-11 驗收時 Ryan 確認排版）
 - vault 寫入任何失敗：log ERROR、回傳 failure result、不擋 Roam 儲存與 Telegram 回覆
 - NotebookLM 程式碼保留、`NOTEBOOKLM_ENABLED` 預設改 false
 
