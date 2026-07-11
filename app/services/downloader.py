@@ -144,7 +144,10 @@ class InstagramDownloader:
         if self._instaloader is not None:
             return self._instaloader
         
-        L = instaloader.Instaloader(
+        # UA 必須跟 cookies 誕生的瀏覽器一致：IG session 綁 client 指紋，
+        # 用 instaloader 預設 UA 打會被判 cross-client 拒絕（Login required）
+        browser_ua = ig_cookie_provider.read_user_agent()
+        loader_kwargs = dict(
             download_videos=False,
             download_video_thumbnails=False,
             download_geotags=False,
@@ -153,6 +156,9 @@ class InstagramDownloader:
             compress_json=False,
             max_connection_attempts=3,
         )
+        if browser_ua:
+            loader_kwargs["user_agent"] = browser_ua
+        L = instaloader.Instaloader(**loader_kwargs)
         
         # 嘗試載入已存在的 session 檔案
         session_files = list(self.session_dir.glob("session-*"))
@@ -187,9 +193,13 @@ class InstagramDownloader:
                     try:
                         test_user = L.test_login()
                         if test_user:
+                            # 關鍵：cookie 注入不會設 context.username，而 instaloader
+                            # 內部以它判斷 is_logged_in——漏設會讓 Post.from_shortcode
+                            # 走匿名端點被擋、save_session_to_file 拋 Login required
+                            L.context.username = test_user
                             self._instaloader = L
                             self._instaloader_username = test_user
-                            
+
                             # 儲存 session 供後續使用
                             session_path = self.session_dir / f"session-{test_user}"
                             L.save_session_to_file(str(session_path))
@@ -283,6 +293,11 @@ class InstagramDownloader:
         if self._cookies_file:
             video_ydl_opts["cookiefile"] = str(self._cookies_file)
             audio_ydl_opts["cookiefile"] = str(self._cookies_file)
+            browser_ua = ig_cookie_provider.read_user_agent()
+            if browser_ua:
+                # 與 cookies 誕生的瀏覽器同 UA（同 client 指紋），降低 session 被作廢風險
+                video_ydl_opts["http_headers"] = {"User-Agent": browser_ua}
+                audio_ydl_opts["http_headers"] = {"User-Agent": browser_ua}
             logger.info("使用 cookies.txt 進行下載")
         elif self._working_browser:
             # 備用：使用瀏覽器 cookies

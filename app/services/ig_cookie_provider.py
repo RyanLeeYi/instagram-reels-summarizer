@@ -16,8 +16,10 @@ logger = logging.getLogger(__name__)
 IG_URLS = ["https://www.instagram.com", "https://i.instagram.com"]
 NETSCAPE_HEADER = "# Netscape HTTP Cookie File\n# 由 ig_cookie_provider 自動產生，手動修改會被覆寫\n"
 
-# 可注入的抓取函式型別：回傳 Playwright cookie dict 列表；None 代表 CDP 不可用
-FetchCookies = Callable[[], Awaitable[Optional[List[dict]]]]
+# 可注入的抓取函式型別：回傳 (cookies, user_agent)；cookies 為 None 代表 CDP 不可用。
+# UA 必須跟著 cookies 走：IG session 綁 client 指紋，用別的 UA 打會被判 cross-client 拒絕
+FetchResult = tuple[Optional[List[dict]], Optional[str]]
+FetchCookies = Callable[[], Awaitable[FetchResult]]
 
 
 class IGCookieProvider:
@@ -30,6 +32,7 @@ class IGCookieProvider:
         fetch_cookies: Optional[FetchCookies] = None,
     ):
         self.cookies_file = cookies_file
+        self.user_agent_file = cookies_file.parent / (cookies_file.name + ".ua")
         self.max_age_seconds = max_age_seconds
         self._fetch_cookies = fetch_cookies or self._fetch_from_cdp
 
@@ -64,9 +67,17 @@ class IGCookieProvider:
             return False
         return "sessionid" in content
 
+    def read_user_agent(self) -> Optional[str]:
+        """取 cookies 誕生瀏覽器的 UA（sidecar 檔）；沒有回 None。"""
+        try:
+            ua = self.user_agent_file.read_text(encoding="utf-8").strip()
+            return ua or None
+        except OSError:
+            return None
+
     async def refresh(self) -> bool:
         """從 CDP 抽 cookies 覆寫 cookies.txt；拿不到含 sessionid 的就保留原檔。"""
-        cookies = await self._fetch_cookies()
+        cookies, user_agent = await self._fetch_cookies()
         if cookies is None:
             logger.warning("⚠️ CDP Chrome 不可用，沿用既有 cookies.txt")
             return False
@@ -77,6 +88,8 @@ class IGCookieProvider:
             )
             return False
         self.cookies_file.write_text(self.to_netscape(cookies), encoding="utf-8")
+        if user_agent:
+            self.user_agent_file.write_text(user_agent + "\n", encoding="utf-8")
         logger.info(f"✅ 已從 CDP Chrome 刷新 IG cookies（{len(cookies)} 個）→ {self.cookies_file}")
         return True
 
@@ -86,8 +99,8 @@ class IGCookieProvider:
             return True
         return await self.refresh()
 
-    async def _fetch_from_cdp(self) -> Optional[List[dict]]:
-        """連 CDP Chrome 取 IG cookies；Chrome 沒開就嘗試拉起（同 NotebookLM profile）。"""
+    async def _fetch_from_cdp(self) -> FetchResult:
+        """連 CDP Chrome 取 IG cookies + 瀏覽器 UA；Chrome 沒開就嘗試拉起（同 NotebookLM profile）。"""
         try:
             # 延遲 import 避免循環依賴；共用 NotebookLM 的 Chrome 啟動邏輯與 profile，
             # _launch_browser 會自動拉起 Chrome 並設定 _context（現有 context 含登入態）
@@ -95,14 +108,20 @@ class IGCookieProvider:
 
             svc = NotebookLMSyncService()
             if not await svc._launch_browser():
-                return None
+                return None, None
             try:
-                return await svc._context.cookies(IG_URLS)
+                cookies = await svc._context.cookies(IG_URLS)
+                page = await svc._context.new_page()
+                try:
+                    user_agent = await page.evaluate("navigator.userAgent")
+                finally:
+                    await page.close()
+                return cookies, user_agent
             finally:
                 await svc._close_browser()
         except Exception as e:
             logger.warning(f"從 CDP 取 IG cookies 失敗: {e}")
-            return None
+            return None, None
 
 
 # 模組級單例：downloader 直接用

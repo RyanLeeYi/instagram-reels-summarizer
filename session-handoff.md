@@ -20,5 +20,7 @@
 1. ~~F1 重驗~~ ✅ 2026-07-11 20:04 e2e 全通（F1、F6 隨之 passing）
 2. ~~F7 NotebookLM~~ ✅ 已修並實證（UI 改版成 tab 佈局，_click_add_source 先切「來源」tab；20:02 失敗的摘要已補傳，notebook 1 個來源）。**待確認**：檔案上傳路徑同修但未實測——下支 reel 的 log 看 `_upload_files_source` 有沒有過
 3. ~~F3 / F4 重驗~~ ✅ 2026-07-11 20:22–20:25 實測過（F3 走 Googlebot SSR fallback；F7 修復在正式流程也驗證了）
-4. **F13 已實作（取代手動匯出）**：cookies 改由 CDP Chrome 自動供應（ig_cookie_provider + downloader._ensure_fresh_cookies，DECISIONS D5）。**差一步：Ryan 在 CDP Chrome（NotebookLM 那個視窗，profile `~\.chrome-cdp-notebooklm`）開 instagram.com 登入一次** → 等幾分鐘避 rate limit → 重傳 p/DaSd-YuD_x8 → F2 + F13 一起收。若 CDP Chrome 沒開著：`chrome --remote-debugging-port=9222 --user-data-dir="%USERPROFILE%\.chrome-cdp-notebooklm"`
-5. F12：把 instaloader 未登入的 NoneType 錯誤映射成可行動訊息（TDD）
+4. ~~F13~~ ✅ passing：cookies+UA 由 CDP Chrome 自動供應，Ryan 已登入，test_login 驗證過（DECISIONS D5）
+5. **F2 卡上游**：instaloader 4.15.2 的 Post.from_shortcode graphql 被 IG 改版打壞（[instaloader#2710](https://github.com/instaloader/instaloader/issues/2710)，2026-07-06 開）。選項：A 等上游修版（每天 `pip install -U instaloader` 試一次或盯 issue）；B 自建 fallback——用已認證 session 打 iPhone API `api/v1/media/{pk}/info/`（shortcode→media_id 標準轉換），繞過 graphql。**等 Ryan 拍板再動**
+6. F12：把 instaloader 未登入的 NoneType 錯誤映射成可行動訊息（TDD）
+7. 修好後注意：instaloader venv 已升 4.15.2；session 檔已存 temp_videos/session-*（下次啟動直接載入不再打 test_login）

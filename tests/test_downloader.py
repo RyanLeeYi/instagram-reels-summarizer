@@ -85,3 +85,69 @@ class TestEnsureFreshCookies:
         monkeypatch.setattr(dl_module.ig_cookie_provider, "refresh_if_stale", fake_refresh)
         await d._ensure_fresh_cookies()
         assert d._cookies_file is not None
+
+
+class TestUserAgentPropagation:
+    """F13：instaloader 必須用 cookies 誕生瀏覽器的 UA（否則 IG 判 cross-client 拒絕）"""
+
+    def test_get_instaloader_uses_saved_browser_ua(self, tmp_path, monkeypatch):
+        import types
+
+        from app.services import downloader as dl_module
+
+        monkeypatch.chdir(tmp_path)
+        (tmp_path / "cookies.txt").write_text("# empty\n", encoding="utf-8")
+        (tmp_path / "cookies.txt.ua").write_text("UA-FROM-BROWSER\n", encoding="utf-8")
+
+        captured = {}
+
+        class FakeLoader:
+            def __init__(self, **kwargs):
+                captured.update(kwargs)
+                sess = types.SimpleNamespace(
+                    cookies=types.SimpleNamespace(set=lambda *a, **k: None)
+                )
+                self.context = types.SimpleNamespace(_session=sess)
+
+            def test_login(self):
+                return None
+
+            def save_session_to_file(self, path):
+                pass
+
+        monkeypatch.setattr(dl_module.instaloader, "Instaloader", FakeLoader)
+        d = InstagramDownloader()
+        d._get_instaloader()
+        assert captured.get("user_agent") == "UA-FROM-BROWSER"
+
+    def test_get_instaloader_sets_context_username_after_cookie_login(self, tmp_path, monkeypatch):
+        """cookie 注入登入後必須設 context.username——instaloader 內部以它判斷
+        is_logged_in；漏設會導致 Post.from_shortcode 走匿名端點被擋、session 存檔失敗"""
+        import types
+
+        from app.services import downloader as dl_module
+
+        monkeypatch.chdir(tmp_path)
+        (tmp_path / "cookies.txt").write_text(
+            "# Netscape HTTP Cookie File\n"
+            ".instagram.com\tTRUE\t/\tTRUE\t0\tsessionid\tabc\n",
+            encoding="utf-8",
+        )
+
+        class FakeLoader:
+            def __init__(self, **kwargs):
+                sess = types.SimpleNamespace(
+                    cookies=types.SimpleNamespace(set=lambda *a, **k: None)
+                )
+                self.context = types.SimpleNamespace(_session=sess, username=None)
+
+            def test_login(self):
+                return "tester"
+
+            def save_session_to_file(self, path):
+                pass
+
+        monkeypatch.setattr(dl_module.instaloader, "Instaloader", FakeLoader)
+        d = InstagramDownloader()
+        loader = d._get_instaloader()
+        assert loader.context.username == "tester"

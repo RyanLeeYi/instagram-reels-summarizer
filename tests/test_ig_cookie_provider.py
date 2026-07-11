@@ -45,7 +45,7 @@ class TestRefresh:
         target = tmp_path / "cookies.txt"
 
         async def fake_fetch():
-            return [_pw_cookie("sessionid", "s3cr3t"), _pw_cookie("csrftoken", "tok")]
+            return [_pw_cookie("sessionid", "s3cr3t"), _pw_cookie("csrftoken", "tok")], None
 
         p = IGCookieProvider(cookies_file=target, fetch_cookies=fake_fetch)
         assert await p.refresh() is True
@@ -54,12 +54,32 @@ class TestRefresh:
         assert "csrftoken\ttok" in text
 
     @pytest.mark.asyncio
+    async def test_writes_user_agent_sidecar(self, tmp_path):
+        """session 綁 client 指紋：cookies 誕生的瀏覽器 UA 要一起存，
+        instaloader/yt-dlp 用同一個 UA 才不會被 IG 判 cross-client 拒絕。"""
+        target = tmp_path / "cookies.txt"
+        ua = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) Chrome/150.0.0.0"
+
+        async def fake_fetch():
+            return [_pw_cookie("sessionid", "s")], ua
+
+        p = IGCookieProvider(cookies_file=target, fetch_cookies=fake_fetch)
+        assert await p.refresh() is True
+        assert p.user_agent_file.read_text(encoding="utf-8").strip() == ua
+        assert p.read_user_agent() == ua
+
+    @pytest.mark.asyncio
+    async def test_read_user_agent_returns_none_when_missing(self, tmp_path):
+        p = IGCookieProvider(cookies_file=tmp_path / "cookies.txt")
+        assert p.read_user_agent() is None
+
+    @pytest.mark.asyncio
     async def test_no_sessionid_keeps_existing_file(self, tmp_path):
         target = tmp_path / "cookies.txt"
         target.write_text("OLD CONTENT", encoding="utf-8")
 
         async def fake_fetch():
-            return [_pw_cookie("mid", "anon-only")]
+            return [_pw_cookie("mid", "anon-only")], None
 
         p = IGCookieProvider(cookies_file=target, fetch_cookies=fake_fetch)
         assert await p.refresh() is False
@@ -71,7 +91,7 @@ class TestRefresh:
         target.write_text("OLD CONTENT", encoding="utf-8")
 
         async def fake_fetch():
-            return None
+            return None, None
 
         p = IGCookieProvider(cookies_file=target, fetch_cookies=fake_fetch)
         assert await p.refresh() is False
@@ -92,7 +112,7 @@ class TestRefreshIfStale:
         async def fake_fetch():
             nonlocal called
             called = True
-            return [_pw_cookie("sessionid", "new")]
+            return [_pw_cookie("sessionid", "new")], None
 
         p = IGCookieProvider(cookies_file=target, max_age_seconds=3600, fetch_cookies=fake_fetch)
         assert await p.refresh_if_stale() is True
@@ -108,7 +128,7 @@ class TestRefreshIfStale:
         )
 
         async def fake_fetch():
-            return [_pw_cookie("sessionid", "fresh-login")]
+            return [_pw_cookie("sessionid", "fresh-login")], None
 
         p = IGCookieProvider(cookies_file=target, max_age_seconds=3600, fetch_cookies=fake_fetch)
         assert await p.refresh_if_stale() is True
@@ -128,7 +148,7 @@ class TestRefreshIfStale:
         os.utime(target, (old, old))
 
         async def fake_fetch():
-            return [_pw_cookie("sessionid", "renewed")]
+            return [_pw_cookie("sessionid", "renewed")], None
 
         p = IGCookieProvider(cookies_file=target, max_age_seconds=3600, fetch_cookies=fake_fetch)
         assert await p.refresh_if_stale() is True
