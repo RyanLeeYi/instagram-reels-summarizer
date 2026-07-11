@@ -592,6 +592,7 @@ instagram-reels-summarizer/
 │   │   └── telegram_handler.py  # Telegram Bot 訊息處理
 │   ├── 📁 services/
 │   │   ├── downloader.py        # Instagram 下載 (yt-dlp + Instaloader)
+│   │   ├── ig_cookie_provider.py # IG cookies/UA 自動供應（Chrome CDP）
 │   │   ├── threads_downloader.py # Threads 貼文/串文下載（API + Googlebot SSR）
 │   │   ├── download_logger.py   # 下載記錄（大小與連結）
 │   │   ├── transcriber.py       # 語音轉錄 (faster-whisper)
@@ -601,8 +602,9 @@ instagram-reels-summarizer/
 │   │   ├── claude_summarizer.py # Claude Code CLI 摘要
 │   │   ├── copilot_summarizer.py # GitHub Copilot CLI 摘要
 │   │   ├── prompt_loader.py     # Prompt 模板載入器
+│   │   ├── vault_sync.py        # Obsidian vault 知識庫寫入（含 INDEX 同步與 LLM 連結）
 │   │   ├── roam_sync.py         # Roam Research 本地同步
-│   │   └── notebooklm_sync.py   # NotebookLM 自動上傳 (Chrome CDP)
+│   │   └── notebooklm_sync.py   # NotebookLM 自動上傳 (Chrome CDP，已由 vault_sync 取代、預設停用)
 │   ├── 📁 prompts/              # AI Prompt 模板
 │   │   ├── 📁 examples/         # 範例筆記（供 AI 參考）
 │   │   │   ├── 📁 audio/        # 有語音的影片範例
@@ -624,6 +626,8 @@ instagram-reels-summarizer/
 │   ├── test_flow_visual.py      # 完整流程測試（含視覺）
 │   ├── test_post.py             # Instagram 貼文下載測試
 │   ├── test_post_upload.py      # 貼文下載 + NotebookLM 上傳測試
+│   ├── test_googlebot_thread.py # Threads Googlebot SSR 測試
+│   ├── test_threads_full.py     # Threads 完整流程測試
 │   ├── test_notebooklm.py       # NotebookLM 上傳測試
 │   ├── test_notebooklm_file.py  # NotebookLM 檔案上傳測試
 │   ├── test_claude_summarize.py # Claude 摘要測試
@@ -631,17 +635,26 @@ instagram-reels-summarizer/
 │   └── cleanup_notebooklm.py   # NotebookLM Notebook 清理
 ├── 📁 tests/                    # pytest 單元測試
 │   ├── test_downloader.py       # 下載模組測試
-│   └── test_summarizer.py       # 摘要模組測試
+│   ├── test_ig_cookie_provider.py # cookies/UA 自動供應測試
+│   ├── test_summarizer.py       # 摘要模組測試
+│   └── test_vault_sync.py       # vault 知識庫寫入測試
 ├── 📁 docs/                     # 專案文件
+│   ├── ARCHITECTURE.md          # 架構與模組邊界
 │   ├── telegram-deduplication.md
+│   ├── 📁 prd/                  # 需求規格（vault-sync.md）
 │   └── 📁 code-review/          # 程式碼審查紀錄
 ├── 📁 roam_backup/              # Roam Research 本地備份
 ├── 📁 temp_videos/              # 暫存影片目錄（自動清理）
 ├── 📁 note_example/             # 輸出筆記範例
 ├── .env.example                 # 環境變數範例
 ├── cookies.txt.example          # Instagram Cookies 範例
+├── notebooklm_cookies.txt.example # NotebookLM Cookies 範例
 ├── categories.txt               # 分類清單
 ├── requirements.txt             # Python 依賴套件
+├── CLAUDE.md                    # AI agent 工作規則
+├── feature_list.json            # 功能清單與驗收狀態
+├── session-handoff.md           # 開發交接紀錄
+├── init.ps1                     # 環境恢復腳本
 ├── instagram-reels-summarizer-spec.md  # 完整功能規格
 ├── start.bat                    # Windows 啟動腳本 (CMD)
 ├── start.ps1                    # Windows 啟動腳本 (PowerShell)
