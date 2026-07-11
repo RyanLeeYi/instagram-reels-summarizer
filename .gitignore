@@ -51,6 +51,7 @@ notebooklm_cookies.txt
 # Instaloader Session Files - NEVER COMMIT
 *.session
 session-*
+!session-handoff.md
 
 # Database
 *.db
@@ -71,7 +72,10 @@ roam_backup/
 # Example/Sample Files (local only)
 note_example/
 app/prompts/examples/
-docs/
+# docs 預設本地（舊 code-review 紀錄），只追蹤 harness 文件
+docs/*
+!docs/ARCHITECTURE.md
+!docs/prd/
 
 # Logs
 *.log
