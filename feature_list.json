@@ -12,6 +12,7 @@
     {"id": "F9", "name": "Webhook 模式接收 Telegram 訊息（Cloudflare tunnel）", "acceptance": "對 bot 傳訊息，log 出現 POST /webhook/telegram 200 且 handler 收到", "status": "passing", "evidence": "2026-07-11 19:42 實收 Ryan 訊息（POST /webhook/telegram 200、handler 記錄訊息 ID 688）；tunnel ingress 8001 已於第三場修正"},
     {"id": "F10", "name": "單元測試可執行", "acceptance": ".venv\\Scripts\\python.exe -m pytest tests -q 全過", "status": "passing", "evidence": "2026-07-11 補裝 pytest/pytest-asyncio（原 venv 沒有，tests/ 是死的）→ 11 passed（30 個 pydantic V2 deprecation warnings，另列 F11）"},
     {"id": "F11", "name": "pydantic V2 遷移（消 deprecation warnings）", "acceptance": "pytest 無 PydanticDeprecatedSince20 警告；config.py 改用 json_schema_extra / ConfigDict", "status": "failing", "evidence": null},
-    {"id": "F12", "name": "下載失敗錯誤訊息可行動化", "acceptance": "instaloader 未登入/cookies 失效時，Telegram 回覆與 log 顯示「IG 需要登入，請更新 cookies.txt」類訊息，不再是 'NoneType' object is not subscriptable；單元測試覆蓋", "status": "failing", "evidence": null}
+    {"id": "F12", "name": "下載失敗錯誤訊息可行動化", "acceptance": "instaloader 未登入/cookies 失效時，Telegram 回覆與 log 顯示「IG 需要登入，請更新 cookies.txt」類訊息，不再是 'NoneType' object is not subscriptable；單元測試覆蓋", "status": "failing", "evidence": null},
+    {"id": "F13", "name": "IG cookies 自動供應（CDP Chrome 養 session，免手動匯出）", "acceptance": "在 CDP Chrome（NotebookLM 同一 profile）登入 IG 一次後：下載前自動從 CDP 抽 IG cookies 更新 cookies.txt（含 sessionid，過期/缺失才刷新）；CDP 不可用或未登入時保留既有檔案並輸出可行動警告；單元測試覆蓋轉檔與刷新邏輯；e2e＝重傳 p/DaSd-YuD_x8 成功", "status": "failing", "evidence": "2026-07-11 20:33 程式完成（TDD +11 tests，22 passed）：ig_cookie_provider（CDP 抽 cookies→Netscape、sessionid 檢查、staleness）+ downloader 兩入口接 _ensure_fresh_cookies（含 instaloader 快取作廢）。實測 CDP 路徑：正確偵測未登入並警告。缺：Ryan 在 CDP Chrome 登入 IG 一次 → 重傳 p/DaSd-YuD_x8（同時驗 F2）"}
   ]
 }

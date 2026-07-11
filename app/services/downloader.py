@@ -12,6 +12,7 @@ import yt_dlp
 import instaloader
 
 from app.config import settings
+from app.services.ig_cookie_provider import provider as ig_cookie_provider
 
 
 logger = logging.getLogger(__name__)
@@ -79,6 +80,28 @@ class InstagramDownloader:
             logger.info(f"✅ 找到 cookies 檔案: {self.COOKIES_FILE.absolute()}")
             return self.COOKIES_FILE
         return None
+
+    async def _ensure_fresh_cookies(self) -> None:
+        """下載前刷新 cookies（F13：從 CDP Chrome 自動供應；失敗就沿用既有檔案）。"""
+        before = (
+            self._cookies_file.stat().st_mtime
+            if self._cookies_file and self._cookies_file.exists()
+            else None
+        )
+        try:
+            await ig_cookie_provider.refresh_if_stale()
+        except Exception as e:
+            logger.warning(f"刷新 IG cookies 失敗，沿用既有檔案: {e}")
+        self._cookies_file = self._find_cookies_file()
+        after = (
+            self._cookies_file.stat().st_mtime
+            if self._cookies_file and self._cookies_file.exists()
+            else None
+        )
+        if after != before:
+            # cookies 換了，作廢用舊 cookies 建的 instaloader session 快取
+            self._instaloader = None
+            self._instaloader_username = None
 
     def _load_cookies_from_netscape(self, cookie_file: Path) -> dict:
         """
@@ -224,6 +247,8 @@ class InstagramDownloader:
                 success=False,
                 error_message="無法解析此連結，請確認是否為有效的 Instagram Reels 連結",
             )
+
+        await self._ensure_fresh_cookies()
 
         # 生成唯一檔名
         file_id = str(uuid.uuid4())[:8]
@@ -493,7 +518,9 @@ class InstagramDownloader:
                 success=False,
                 error_message="無法從連結提取貼文 ID",
             )
-        
+
+        await self._ensure_fresh_cookies()
+
         # 在執行緒池中執行（instaloader 是同步的）
         loop = asyncio.get_event_loop()
         try:
