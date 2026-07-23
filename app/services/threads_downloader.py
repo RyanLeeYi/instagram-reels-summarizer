@@ -83,10 +83,15 @@ class ThreadsDownloader:
     # https://www.threads.net/@username/post/ABC123xyz
     # https://www.threads.com/@username/post/ABC123xyz
     # https://threads.net/t/ABC123xyz
+    # https://www.threads.com/share/ABC123xyz（分享/複製連結產生的短連結，會 302 轉址到正規貼文）
     THREADS_URL_PATTERNS = [
         r"https?://(?:www\.)?threads\.(?:net|com)/@([\w.]+)/post/([A-Za-z0-9_-]+)",
         r"https?://(?:www\.)?threads\.(?:net|com)/t/([A-Za-z0-9_-]+)",
+        r"https?://(?:www\.)?threads\.(?:net|com)/share/([A-Za-z0-9_-]+)",
     ]
+
+    # /share/<code> 短連結格式（需先跟隨轉址才能取得正規貼文 URL）
+    SHARE_URL_PATTERN = r"https?://(?:www\.)?threads\.(?:net|com)/share/([A-Za-z0-9_-]+)"
 
     def __init__(self):
         self._api = None
@@ -647,6 +652,40 @@ class ThreadsDownloader:
                 return True
         return False
 
+    def is_share_url(self, url: str) -> bool:
+        """判斷是否為 /share/<code> 短連結格式"""
+        return bool(re.match(self.SHARE_URL_PATTERN, url))
+
+    def _resolve_share_url(self, url: str) -> str:
+        """
+        跟隨 /share/<code> 短連結的 302 轉址，取得正規貼文 URL。
+
+        /share/ 的 code 是不透明的轉址 token，並非貼文 ID，
+        必須先解析轉址才能得到 /@username/post/<id>。
+
+        Args:
+            url: /share/ 短連結
+
+        Returns:
+            正規貼文 URL（去除 query 參數）；轉址失敗時降級回原 url
+        """
+        try:
+            headers = {
+                "User-Agent": (
+                    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+                    "AppleWebKit/537.36"
+                ),
+            }
+            resp = requests.get(
+                url, headers=headers, timeout=30, allow_redirects=True
+            )
+            resolved = resp.url.split("?")[0]
+            logger.info(f"Threads share 連結轉址解析: {url} → {resolved}")
+            return resolved
+        except requests.RequestException as e:
+            logger.warning(f"解析 share 連結轉址失敗，沿用原連結: {e}")
+            return url
+
     def extract_post_id(self, url: str) -> Optional[str]:
         """
         從 URL 提取貼文 ID
@@ -708,6 +747,11 @@ class ThreadsDownloader:
                 success=False,
                 error_message="無法解析此連結，請確認是否為有效的 Threads 連結",
             )
+
+        # /share/ 短連結：先跟隨轉址取得正規貼文 URL，再解析 post_id
+        if self.is_share_url(url):
+            loop = asyncio.get_event_loop()
+            url = await loop.run_in_executor(None, self._resolve_share_url, url)
 
         post_id = self.extract_post_id(url)
         if not post_id:

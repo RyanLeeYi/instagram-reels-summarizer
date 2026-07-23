@@ -54,8 +54,9 @@ class TelegramBotHandler:
     )
 
     # Threads URL 正則表達式（支援 threads.net 和 threads.com）
+    # 含 /share/<code> 分享短連結（下載器會跟隨轉址取得正規貼文 URL）
     THREADS_URL_PATTERN = re.compile(
-        r"https?://(?:www\.)?threads\.(?:net|com)/(?:@[\w.]+/post|t)/([A-Za-z0-9_-]+)"
+        r"https?://(?:www\.)?threads\.(?:net|com)/(?:@[\w.]+/post|t|share)/([A-Za-z0-9_-]+)"
     )
 
     def __init__(self):

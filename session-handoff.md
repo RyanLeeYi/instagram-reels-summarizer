@@ -1,8 +1,15 @@
 # Session Handoff
 
-> 最後更新：2026-07-11（第六場：F14/F5/F8 驗收 passing、F2 拍板等上游）
+> 最後更新：2026-07-23（第七場：F17 Threads /share/ 短連結支援 passing）
 
-## 這個 session 做了
+## 這個 session 做了（2026-07-23）
+
+- **F17 passing**：Threads `/share/<code>` 分享短連結支援。症狀＝`threads.com/share/BAUrkxxv3Q/` 完全處理不了。根因：兩層 URL 辨識都不認 `/share/` 格式——①`telegram_handler.THREADS_URL_PATTERN` 不匹配 → `_extract_threads_url` 回 None → 訊息掉到「無法辨識」提示，根本沒進 Threads 流程；②`ThreadsDownloader.validate_url` 也拒收；且 share code 是不透明轉址 token（非 post_id），必須先跟隨 302 才拿得到 `/@user/post/<id>`。
+  - 修法：threads_downloader 加 `/share/` pattern + `SHARE_URL_PATTERN` + `is_share_url()` + `_resolve_share_url()`（跟隨轉址、去 query、失敗降級回原 url）；`download()` 對 share 連結先正規化再 `extract_post_id`。telegram_handler `THREADS_URL_PATTERN` 加 `share` 分支。
+  - 證據：TDD（tests/test_threads_share_url.py 10 tests RED→GREEN），全套件 **46 passed**；真實 e2e：`share/BAUrkxxv3Q` → `@dustin_gmat/post/DbHiGmWD10O`。Codex review 無缺陷。
+  - ⚠️ 服務由 mission-control 管理（`reels-summarizer`, port 8001），改動要生效需經中台重啟。
+
+## 之前的 session 做了
 
 - **F5 passing**：三 backend 實測切換（claude/sonnet、ollama/qwen3:14b、copilot restore），各自 log + 摘要成功證據；verifier 7/7 pass。.env 已 restore copilot
 - **F8 passing**：失敗寫入（id 25/26/27）+ 排程器啟動 log + 沙盒重試 1→2→3→abandoned 全鏈
