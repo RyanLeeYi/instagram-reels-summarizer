@@ -1,8 +1,18 @@
 # Session Handoff
 
-> 最後更新：2026-07-23（第七場：F17 Threads /share/ 短連結支援 passing）
+> 最後更新：2026-07-23（第八場：F18 fallback 鏈**只完成設計**，待簽核後實作）
 
-## 這個 session 做了（2026-07-23）
+## 這個 session 做了（2026-07-23 第八場）
+
+- **F18 設計定案、未實作**：`docs/prd/summarizer-fallback-chain.md`（commit efc7310）。需求源自 Ryan「Copilot 沒流量時自動切 Codex/Claude」
+  - ⚠️ **F18 尚未寫進 feature_list.json**——照 harness 規矩 acceptance 要 Ryan 簽核才凍結。spec 最後一段就是待簽核的 acceptance
+  - **關鍵查證結論**：Copilot 剩餘額度 % 沒有非互動取得管道（CLI 只在互動 UI 顯示；`gh api user/copilot/usage` → 404）。原需求「剩 <5% 就切」不可行 → 改**反應式 fallback**（執行失敗當下換手）。詳見 vault DECISIONS D6
+  - **設計摘要**：新增 `CodexCLISummarizer`（`codex exec -o <file> --skip-git-repo-check -s read-only`）+ `FallbackSummarizer` 包裝器（無狀態、每請求從鏈頭重試）+ factory 組鏈（`SUMMARIZER_FALLBACK_ENABLED` / `SUMMARIZER_FALLBACK_CHAIN`）。鏈＝Copilot→Codex→Claude→Ollama，一般化不特判 copilot
+  - **容錯落點改變**：現行 factory 是「建構時」查 CLI 可用性才 fallback（只抓 CLI 沒裝）；F18 改「執行時」失敗才 fallback（額度耗盡是 runtime 錯誤）
+  - **結果物件加 `backend` 欄位**，Telegram 僅在 fallback 發生時標「🤖 本則由 <backend> 接手」
+  - **範圍界定**：pipeline 只有「摘要／筆記生成」吃 Copilot 額度（視覺分析走本地 Ollama、F14 連結 pass 走 claude 且失敗已優雅降級）→ F18 不擴及那兩處
+
+## 之前的 session 做了（第七場 2026-07-23）
 
 - **F17 passing**：Threads `/share/<code>` 分享短連結支援。症狀＝`threads.com/share/BAUrkxxv3Q/` 完全處理不了。根因：兩層 URL 辨識都不認 `/share/` 格式——①`telegram_handler.THREADS_URL_PATTERN` 不匹配 → `_extract_threads_url` 回 None → 訊息掉到「無法辨識」提示，根本沒進 Threads 流程；②`ThreadsDownloader.validate_url` 也拒收；且 share code 是不透明轉址 token（非 post_id），必須先跟隨 302 才拿得到 `/@user/post/<id>`。
   - 修法：threads_downloader 加 `/share/` pattern + `SHARE_URL_PATTERN` + `is_share_url()` + `_resolve_share_url()`（跟隨轉址、去 query、失敗降級回原 url）；`download()` 對 share 連結先正規化再 `extract_post_id`。telegram_handler `THREADS_URL_PATTERN` 加 `share` 分支。
@@ -29,7 +39,8 @@
 
 ## 下一步（具體到可直接動手）
 
-1. 剩餘 failing：**F11**（pydantic V2 遷移）、**F12**（下載失敗錯誤訊息可行動化，TDD）、**F15**（CDP 不可用時快速降級，TDD）、F2（卡上游）。M3 的 F1–F8 重驗除 F2 外全綠
+0. **F18 續行（最優先）**：請 Ryan 簽核 `docs/prd/summarizer-fallback-chain.md` 末段 acceptance → 寫進 feature_list.json 標 failing → TDD 實作（先 FallbackSummarizer 的鏈行為測試，再 CodexCLISummarizer，最後 factory 組鏈；mock subprocess 不燒真 Codex 額度）。Ryan 曾問「要不要順便保護 F14 連結 pass」，已答不建議（走 claude 非 copilot、失敗已優雅降級），要做就開 F19 分開
+1. 其餘 failing：**F11**（pydantic V2 遷移）、**F12**（下載失敗錯誤訊息可行動化，TDD）、**F15**（CDP 不可用時快速降級，TDD）、**F16**（retry 路徑對齊主 pipeline）、F2（卡上游）。M3 的 F1–F8 重驗除 F2 外全綠
 2. 首次排程觸發約 2026-07-12 00:32——看 log「開始執行失敗任務重試」確認真實定時觸發（可補進 F8 evidence 補齊 R4）；預期一波 Telegram 通知
 3. retry 路徑與主 pipeline 漂移：_retry_full_process 只同步 Roam，沒接 vault_sync、沒做視覺分析、/p/ 貼文也走 reel 下載路徑——retry 已常開，值得盡快加 feature 對齊
 2. F12 做的時候順便把 instaloader#2710 這類上游壞損映射成「IG 改版，等上游修復」訊息（現在回 'Fetching Post metadata failed' 對使用者不可行動）

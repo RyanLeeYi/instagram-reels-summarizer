@@ -116,3 +116,4 @@ models/
 # Faster-whisper cache
 ~/.cache/huggingface/
 cookies.txt.ua
+.harness/
