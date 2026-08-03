@@ -16,13 +16,12 @@ from app.database.models import (
     TaskStatus,
     AsyncSessionLocal,
 )
-from app.services.downloader import InstagramDownloader
-from app.services.transcriber import WhisperTranscriber
-from app.services.summarizer_factory import get_summarizer
-from app.services.roam_sync import RoamSyncService
+from app.bot.process_result import ProcessResult
 
 
 logger = logging.getLogger(__name__)
+
+RETRY_SUCCESS_PREFIX = "✅ 重試成功！\n\n"
 
 
 class RetryScheduler:
@@ -30,15 +29,18 @@ class RetryScheduler:
 
     def __init__(self):
         self.scheduler = AsyncIOScheduler()
-        self.downloader = InstagramDownloader()
-        self.transcriber = WhisperTranscriber()
-        self.summarizer = get_summarizer()
-        self.roam_sync = RoamSyncService()
         self.bot: Optional[Bot] = None
+        # 主 pipeline 入口（TelegramBotHandler），由 main.py 注入。
+        # 重試不自己走一條流程——那正是 F16 之前漂移的來源。
+        self.handler = None
 
     def set_bot(self, bot: Bot) -> None:
         """設定 Telegram Bot 實例"""
         self.bot = bot
+
+    def set_handler(self, handler) -> None:
+        """注入主 pipeline 入口（需具備 process_url）"""
+        self.handler = handler
 
     def start(self) -> None:
         """啟動排程器"""
@@ -125,59 +127,32 @@ class RetryScheduler:
                 await self._notify_abandoned(task)
 
     async def _retry_full_process(self, task: FailedTask) -> bool:
-        """完整重試整個處理流程"""
-        # 步驟 1: 下載
-        download_result = await self.downloader.download(task.instagram_url)
-        if not download_result.success:
-            task.error_message = download_result.error_message
-            task.error_type = ErrorType.DOWNLOAD.value
+        """委派給主 pipeline 的統一入口重跑（F16）。
+
+        重試與使用者手動傳連結走完全相同的流程：型別分流、視覺分析、
+        vault 知識庫寫入一應俱全，不再是這裡自己維護的簡化版。
+        """
+        if self.handler is None:
+            # 寧可失敗也不要偷偷跑一條會漂移的舊路徑
+            task.error_message = "重試流程未注入主 pipeline handler，無法重試"
+            logger.error(task.error_message)
             return False
 
-        audio_path = download_result.audio_path
-        video_title = download_result.title or "未知標題"
+        result: ProcessResult = await self.handler.process_url(
+            task.instagram_url,
+            task.telegram_chat_id,
+            None,  # 無進度訊息可編輯；成功後另發通知
+            retry_mode=True,
+        )
 
-        try:
-            # 步驟 2: 轉錄
-            transcribe_result = await self.transcriber.transcribe(audio_path)
-            if not transcribe_result.success:
-                task.error_message = transcribe_result.error_message
-                task.error_type = ErrorType.TRANSCRIBE.value
-                return False
+        if not result.success:
+            if result.error_type is not None:
+                task.error_type = result.error_type.value
+            task.error_message = result.error_message
+            return False
 
-            transcript = transcribe_result.transcript
-
-            # 步驟 3: 摘要
-            summary_result = await self.summarizer.summarize(transcript)
-            if not summary_result.success:
-                task.error_message = summary_result.error_message
-                task.error_type = ErrorType.SUMMARIZE.value
-                return False
-
-            summary = summary_result.summary
-            bullet_points = summary_result.bullet_points
-
-            # 步驟 4: 同步到 Roam
-            roam_result = await self.roam_sync.sync_to_roam(
-                task.instagram_url, video_title, summary, bullet_points, transcript
-            )
-
-            if not roam_result.success:
-                task.error_message = roam_result.error_message
-                task.error_type = ErrorType.SYNC.value
-                # 即使 Roam 同步失敗，也通知使用者摘要結果
-                await self._notify_success(
-                    task, summary, bullet_points, roam_result
-                )
-                return False
-
-            # 通知使用者
-            await self._notify_success(task, summary, bullet_points, roam_result)
-            return True
-
-        finally:
-            # 清理暫存檔案
-            if audio_path:
-                await self.downloader.cleanup(audio_path)
+        await self._notify_retry_success(task, result)
+        return True
 
     async def _retry_from_download(self, task: FailedTask) -> bool:
         """從下載步驟開始重試"""
@@ -188,44 +163,18 @@ class RetryScheduler:
         # 由於我們沒有儲存之前的摘要結果，需要重新處理
         return await self._retry_full_process(task)
 
-    async def _notify_success(
-        self,
-        task: FailedTask,
-        summary: str,
-        bullet_points: list,
-        roam_result,
-    ) -> None:
-        """通知使用者任務成功"""
+    async def _notify_retry_success(self, task: FailedTask, result: ProcessResult) -> None:
+        """通知使用者重試成功——內容沿用主 pipeline 產出的回覆，兩條路徑一致。"""
         if self.bot is None:
             logger.warning("Bot 未設定，無法發送通知")
             return
 
         try:
-            bullets_text = "\n".join([f"• {point}" for point in bullet_points])
-
-            if roam_result.success and roam_result.page_url:
-                roam_section = f"📎 Roam Research\n{roam_result.page_url}"
-            else:
-                roam_section = "📎 Roam Research\n⚠️ 同步失敗"
-
-            message = f"""✅ 重試成功！
-
-📝 摘要
-{summary}
-
-📌 重點
-{bullets_text}
-
-{roam_section}
-
-🔗 原始連結
-{task.instagram_url}"""
-
+            body = result.reply_text or f"🔗 {task.instagram_url}"
             await self.bot.send_message(
                 chat_id=task.telegram_chat_id,
-                text=message,
+                text=RETRY_SUCCESS_PREFIX + body,
             )
-
         except Exception as e:
             logger.error(f"發送通知失敗: {e}")
 

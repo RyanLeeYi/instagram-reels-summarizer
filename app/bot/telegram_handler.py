@@ -30,6 +30,7 @@ from app.services.visual_analyzer import VideoVisualAnalyzer
 from app.services.download_logger import DownloadLogger
 from app.services.notebooklm_sync import NotebookLMSyncService, NotebookLMResult  # noqa: F401 保留備用
 from app.services.vault_sync import VaultSyncService
+from app.bot.process_result import ProcessResult
 from app.database.models import (
     FailedTask,
     ErrorType,
@@ -149,6 +150,16 @@ class TelegramBotHandler:
             session.add(task)
             await session.commit()
             logger.info(f"已記錄失敗任務: {instagram_url}")
+
+    async def _skip_failure_record(
+        self,
+        instagram_url: str,
+        chat_id: str,
+        error_type: ErrorType,
+        error_message: str,
+    ) -> None:
+        """重試流程用的空實作：失敗任務已存在，不要每小時再長一筆 pending。"""
+        logger.debug(f"重試流程失敗，沿用既有 failed_task 紀錄: {instagram_url}")
 
     async def start_command(
         self, update: Update, context: ContextTypes.DEFAULT_TYPE
@@ -353,41 +364,61 @@ class TelegramBotHandler:
             logger.warning(f"發送初始訊息超時，繼續處理: {e}")
             processing_message = None
 
-        # 判斷內容類型：Reel（影片） vs Post（貼文/圖片）
-        is_reel = self._is_reel_url(instagram_url)
+        await self.process_url(instagram_url, chat_id, processing_message)
 
-        if is_reel:
-            # Reel（影片）處理流程
-            await self._handle_reel(
-                instagram_url, chat_id, processing_message
-            )
-        else:
-            # 貼文（圖片）處理流程 - 嘗試使用 instaloader
-            await self._handle_post(
-                instagram_url, chat_id, processing_message
-            )
+    async def process_url(
+        self,
+        url: str,
+        chat_id: str,
+        processing_message,
+        retry_mode: bool = False,
+    ) -> ProcessResult:
+        """依連結型別分流到對應處理流程——**主 pipeline 與重試排程共用的唯一入口**。
+
+        分流規則只寫在這裡：新增型別或改判斷方式時，兩條路徑會一起變動，
+        不會再出現「重試走 reel 下載去打 /p/ 貼文」這種漂移（F16）。
+
+        Args:
+            processing_message: Telegram 訊息物件；重試流程傳 None（不編輯訊息）
+            retry_mode: True 時不再寫入 failed_task（呼叫端已有該筆任務的紀錄）
+        """
+        if self.THREADS_URL_PATTERN.search(url):
+            if not settings.threads_enabled:
+                # 停用時明確拒收，不要讓 threads.com 掉進 IG 貼文下載器空轉重試次數
+                msg = "Threads 功能已停用（THREADS_ENABLED=false）"
+                logger.warning(f"{msg}，略過：{url}")
+                await self._safe_edit_message(processing_message, f"⚠️ {msg}")
+                return ProcessResult.fail(ErrorType.DOWNLOAD, msg)
+            return await self._handle_threads(url, chat_id, processing_message, retry_mode)
+
+        if self._is_reel_url(url):
+            return await self._handle_reel(url, chat_id, processing_message, retry_mode)
+
+        return await self._handle_post(url, chat_id, processing_message, retry_mode)
 
     async def _handle_reel(
         self,
         instagram_url: str,
         chat_id: str,
         processing_message,
-    ) -> None:
+        retry_mode: bool = False,
+    ) -> ProcessResult:
         """處理 Instagram Reel（影片）"""
+        record_failure = self._skip_failure_record if retry_mode else self._save_failed_task
         try:
             # 步驟 1: 下載影片
             logger.info(f"開始處理: {instagram_url}")
             download_result = await self.downloader.download(instagram_url)
 
             if not download_result.success:
-                await self._save_failed_task(
+                await record_failure(
                     instagram_url, chat_id, ErrorType.DOWNLOAD, download_result.error_message
                 )
                 await self._safe_edit_message(
                     processing_message,
                     f"❌ 下載失敗\n\n{download_result.error_message}\n\n已排入重試佇列。"
                 )
-                return
+                return ProcessResult.fail(ErrorType.DOWNLOAD, download_result.error_message)
 
             audio_path = download_result.audio_path
             video_path = download_result.video_path
@@ -435,11 +466,11 @@ class TelegramBotHandler:
                 has_caption = bool(video_caption and video_caption.strip())
                 if not transcript and not visual_description and not has_caption:
                     error_msg = "此影片無可辨識的語音內容，視覺分析也失敗，且無貼文說明"
-                    await self._save_failed_task(
+                    await record_failure(
                         instagram_url, chat_id, ErrorType.TRANSCRIBE, error_msg
                     )
                     await self._safe_edit_message(processing_message, f"❌ 處理失敗\n\n{error_msg}")
-                    return
+                    return ProcessResult.fail(ErrorType.TRANSCRIBE, error_msg)
                 
                 # 如果逐字稿為空但有貼文說明或視覺分析，記錄 fallback 資訊
                 if not transcript and (has_caption or visual_description):
@@ -470,14 +501,14 @@ class TelegramBotHandler:
                 )
 
                 if not note_result.success:
-                    await self._save_failed_task(
+                    await record_failure(
                         instagram_url, chat_id, ErrorType.SUMMARIZE, note_result.error_message
                     )
                     await self._safe_edit_message(
                         processing_message,
                         f"❌ 筆記生成失敗\n\n{note_result.error_message}\n\n已排入重試佇列。"
                     )
-                    return
+                    return ProcessResult.fail(ErrorType.SUMMARIZE, note_result.error_message)
 
                 # 步驟 4: 寫入知識庫（vault，如果啟用）
                 vault_result = None
@@ -502,9 +533,11 @@ class TelegramBotHandler:
 
                 if not roam_result.success:
                     logger.warning(f"筆記儲存失敗: {roam_result.error_message}")
-                    await self._save_failed_task(
+                    await record_failure(
                         instagram_url, chat_id, ErrorType.SYNC, roam_result.error_message
                     )
+                    if retry_mode:
+                        return ProcessResult.fail(ErrorType.SYNC, roam_result.error_message)
 
                 # 構建回覆訊息
                 reply_message = self._format_reply_simple(
@@ -526,6 +559,7 @@ class TelegramBotHandler:
                     note_path=None,
                 )
                 logger.info(f"處理完成: {instagram_url}")
+                return ProcessResult.ok(reply_message, video_title)
 
             finally:
                 # 清理暫存檔案
@@ -540,14 +574,17 @@ class TelegramBotHandler:
                 processing_message,
                 f"❌ 處理過程發生錯誤\n\n{str(e)}\n\n請稍後再試。"
             )
+            return ProcessResult.fail(ErrorType.DOWNLOAD, str(e))
 
     async def _handle_post(
         self,
         instagram_url: str,
         chat_id: str,
         processing_message,
-    ) -> None:
+        retry_mode: bool = False,
+    ) -> ProcessResult:
         """處理 Instagram 貼文（圖片）"""
+        record_failure = self._skip_failure_record if retry_mode else self._save_failed_task
         try:
             # 步驟 1: 嘗試下載貼文圖片
             logger.info(f"開始處理貼文: {instagram_url}")
@@ -558,18 +595,17 @@ class TelegramBotHandler:
             # 如果是影片貼文，改用影片處理流程
             if not post_result.success and post_result.content_type == "reel":
                 logger.info("貼文為影片類型，切換至影片處理流程")
-                await self._handle_reel(instagram_url, chat_id, processing_message)
-                return
+                return await self._handle_reel(instagram_url, chat_id, processing_message, retry_mode)
             
             if not post_result.success:
-                await self._save_failed_task(
+                await record_failure(
                     instagram_url, chat_id, ErrorType.DOWNLOAD, post_result.error_message
                 )
                 await self._safe_edit_message(
                     processing_message,
                     f"❌ 下載失敗\n\n{post_result.error_message}\n\n已排入重試佇列。"
                 )
-                return
+                return ProcessResult.fail(ErrorType.DOWNLOAD, post_result.error_message)
             
             image_paths = post_result.image_paths
             caption = post_result.caption or ""
@@ -595,11 +631,11 @@ class TelegramBotHandler:
                 
                 if not visual_result.success:
                     error_msg = visual_result.error_message or "圖片分析失敗"
-                    await self._save_failed_task(
+                    await record_failure(
                         instagram_url, chat_id, ErrorType.TRANSCRIBE, error_msg
                     )
                     await self._safe_edit_message(processing_message, f"❌ 處理失敗\n\n{error_msg}")
-                    return
+                    return ProcessResult.fail(ErrorType.TRANSCRIBE, error_msg)
                 
                 visual_description = visual_result.overall_visual_summary
                 logger.info(f"圖片分析完成，共 {len(visual_result.frame_descriptions)} 張")
@@ -615,14 +651,14 @@ class TelegramBotHandler:
                 )
                 
                 if not note_result.success:
-                    await self._save_failed_task(
+                    await record_failure(
                         instagram_url, chat_id, ErrorType.SUMMARIZE, note_result.error_message
                     )
                     await self._safe_edit_message(
                         processing_message,
                         f"❌ 筆記生成失敗\n\n{note_result.error_message}\n\n已排入重試佇列。"
                     )
-                    return
+                    return ProcessResult.fail(ErrorType.SUMMARIZE, note_result.error_message)
                 
                 # 步驟 4: 寫入知識庫（vault，如果啟用）——含圖片進 assets
                 vault_result = None
@@ -649,9 +685,11 @@ class TelegramBotHandler:
                 
                 if not roam_result.success:
                     logger.warning(f"筆記儲存失敗: {roam_result.error_message}")
-                    await self._save_failed_task(
+                    await record_failure(
                         instagram_url, chat_id, ErrorType.SYNC, roam_result.error_message
                     )
+                    if retry_mode:
+                        return ProcessResult.fail(ErrorType.SYNC, roam_result.error_message)
                 
                 # 構建回覆訊息
                 reply_message = self._format_reply_simple(
@@ -673,25 +711,29 @@ class TelegramBotHandler:
                     note_path=None,
                 )
                 logger.info(f"貼文處理完成: {instagram_url}")
-                
+                return ProcessResult.ok(reply_message, post_title)
+
             finally:
                 # 清理暫存圖片檔案（圖片已複製到 roam_backup）
                 await self.downloader.cleanup_post_images(image_paths)
-        
+
         except Exception as e:
             logger.error(f"處理貼文過程發生錯誤: {e}", exc_info=True)
             await self._safe_edit_message(
                 processing_message,
                 f"❌ 處理過程發生錯誤\n\n{str(e)}\n\n請稍後再試。"
             )
+            return ProcessResult.fail(ErrorType.DOWNLOAD, str(e))
 
     async def _handle_threads(
         self,
         threads_url: str,
         chat_id: str,
         processing_message,
-    ) -> None:
+        retry_mode: bool = False,
+    ) -> ProcessResult:
         """處理 Threads 串文（支援圖片和影片）"""
+        record_failure = self._skip_failure_record if retry_mode else self._save_failed_task
         media_download_result: ThreadsMediaDownloadResult = None
 
         try:
@@ -700,14 +742,14 @@ class TelegramBotHandler:
             download_result = await self.threads_downloader.download(threads_url)
 
             if not download_result.success:
-                await self._save_failed_task(
+                await record_failure(
                     threads_url, chat_id, ErrorType.DOWNLOAD, download_result.error_message
                 )
                 await self._safe_edit_message(
                     processing_message,
                     f"❌ 下載失敗\n\n{download_result.error_message}\n\n已排入重試佇列。"
                 )
-                return
+                return ProcessResult.fail(ErrorType.DOWNLOAD, download_result.error_message)
 
             # 取得作者名稱
             if download_result.content_type == "single_post" and download_result.post:
@@ -723,14 +765,14 @@ class TelegramBotHandler:
             formatted_content = self.threads_downloader.format_for_summary(download_result)
 
             if not formatted_content:
-                await self._save_failed_task(
+                await record_failure(
                     threads_url, chat_id, ErrorType.DOWNLOAD, "無法取得串文內容"
                 )
                 await self._safe_edit_message(
                     processing_message,
                     "❌ 無法取得串文內容\n\n已排入重試佇列。"
                 )
-                return
+                return ProcessResult.fail(ErrorType.DOWNLOAD, "無法取得串文內容")
 
             # 步驟 3: 下載並分析媒體（如果有）
             visual_description = None
@@ -825,14 +867,14 @@ class TelegramBotHandler:
             )
 
             if not note_result.success:
-                await self._save_failed_task(
+                await record_failure(
                     threads_url, chat_id, ErrorType.SUMMARIZE, note_result.error_message
                 )
                 await self._safe_edit_message(
                     processing_message,
                     f"❌ 筆記生成失敗\n\n{note_result.error_message}\n\n已排入重試佇列。"
                 )
-                return
+                return ProcessResult.fail(ErrorType.SUMMARIZE, note_result.error_message)
 
             # 步驟 5: 寫入知識庫（vault，如果啟用）——media 中僅圖片進 assets
             vault_result = None
@@ -862,9 +904,11 @@ class TelegramBotHandler:
 
             if not roam_result.success:
                 logger.warning(f"筆記儲存失敗: {roam_result.error_message}")
-                await self._save_failed_task(
+                await record_failure(
                     threads_url, chat_id, ErrorType.SYNC, roam_result.error_message
                 )
+                if retry_mode:
+                    return ProcessResult.fail(ErrorType.SYNC, roam_result.error_message)
 
             # 構建回覆訊息
             has_media = bool(all_media)
@@ -897,6 +941,7 @@ class TelegramBotHandler:
                 note_path=None,
             )
             logger.info(f"Threads 處理完成: {threads_url}")
+            return ProcessResult.ok(reply_message, f"@{author}")
 
         except Exception as e:
             logger.error(f"處理 Threads 過程發生錯誤: {e}", exc_info=True)
@@ -904,6 +949,7 @@ class TelegramBotHandler:
                 processing_message,
                 f"❌ 處理過程發生錯誤\n\n{str(e)}\n\n請稍後再試。"
             )
+            return ProcessResult.fail(ErrorType.DOWNLOAD, str(e))
 
         finally:
             # 清理暫存媒體檔案
@@ -1191,13 +1237,8 @@ class TelegramBotHandler:
             # 用 edit 後的訊息作為 processing_message
             processing_message = query.message
 
-            # 判斷 URL 類型並分發處理
-            if self.THREADS_URL_PATTERN.search(url):
-                await self._handle_threads(url, chat_id, processing_message)
-            elif self._is_reel_url(url):
-                await self._handle_reel(url, chat_id, processing_message)
-            else:
-                await self._handle_post(url, chat_id, processing_message)
+            # 分流走統一入口（重新處理與首次處理、重試三者行為一致）
+            await self.process_url(url, chat_id, processing_message)
             return
 
     def build_application(self) -> Application:

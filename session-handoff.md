@@ -1,8 +1,12 @@
 # Session Handoff
 
-> 最後更新：2026-08-03（第九場：F19 passing；F20 新增 failing）
+> 最後更新：2026-08-03（第九場：F19 + F16 passing；F20 新增 failing）
 
 ## 這個 session 做了（2026-08-03 第九場）
+
+- **F16 passing**：retry 路徑對齊主 pipeline。修法是**委派**不是複製——新增 `TelegramBotHandler.process_url()` 作為型別分流的**唯一事實來源**，`handle_message`／reprocess callback／retry 三條路徑共用；handler 改回傳 `ProcessResult`（`app/bot/process_result.py`）並支援 `retry_mode`；`retry_job` 刪掉自建的簡化 pipeline，由 `main.py` 注入 handler 後委派。tests 65→**77 passed**，codex-verify 5/5 pass
+  - ⚠️ **retry_mode 的三個約束**（都是 codex review 抓出來的，改動時別破壞）：①重試時不得再寫 failed_task（否則每小時長一筆 pending）②重試時 Roam 同步失敗要回 `fail(SYNC)`，不能回 ok（否則任務被標 success 就再也不同步）③`save_processed_url` 已改 **upsert**——委派後同一 URL 會重跑，舊的純 insert 會撞 unique 然後被誤報成下載失敗
+  - `THREADS_ENABLED=false` 時 threads URL 現在明確拒收，不再掉進 IG 貼文下載器
 
 - **F19 passing**：CDP Chrome 生命週期收斂（停止時關掉自己啟動的、啟動時收養上一輪殘留）。PRD `docs/prd/chrome-cdp-lifecycle.md`（Ryan 當場簽核 acceptance）；新模組 `app/services/chrome_lifecycle.py`；`notebooklm_sync._start_chrome_cdp` 成功後 `mark_owned(pid)`；`main.lifespan` startup 收養、shutdown 關閉。TDD 19 tests，全套 **65 passed**（原 46）
   - **擁有權規則**：`_is_cdp_running()` 已為 true → 不擁有（使用者自己開的，絕不關）；自己啟動成功 → 擁有。狀態放**模組層級**＋持久化到 `~/.chrome-cdp-notebooklm/.owned-by-reels.json`（cookies 刷新每次 new 一個 service 實例，放 instance 會歸零；服務被強制 kill 時 lifespan 不跑，殘留只能靠下次啟動回收）
@@ -48,7 +52,7 @@
 
 ## 下一步（具體到可直接動手）
 
--1. **本輪未解、值得優先**：**F16**（retry 路徑漂移——RETRY_ENABLED 常開，每小時正在用漂移的路徑補收，品質是壞的）＞ F18。另 **Copilot CLI 目前在本機找不到**（log：`Copilot CLI 未找到 → fallback 到 Ollama`），F18 的動機正在發生
+-1. **未觀察**：F16 尚未經歷一次真實的每小時排程重試（目前 14 筆 pending 多數卡 instaloader#2710）。下次排程觸發時看 log 確認委派路徑實跑。另 **Copilot CLI 目前在本機找不到**（log：`Copilot CLI 未找到 → fallback 到 Ollama`），F18 的動機正在發生
 0. **F18 續行**：請 Ryan 簽核 `docs/prd/summarizer-fallback-chain.md` 末段 acceptance → 寫進 feature_list.json 標 failing → TDD 實作（先 FallbackSummarizer 的鏈行為測試，再 CodexCLISummarizer，最後 factory 組鏈；mock subprocess 不燒真 Codex 額度）。Ryan 曾問「要不要順便保護 F14 連結 pass」，已答不建議（走 claude 非 copilot、失敗已優雅降級），要做就開 F19 分開
 1. 其餘 failing：**F11**（pydantic V2 遷移）、**F12**（下載失敗錯誤訊息可行動化，TDD）、**F15**（CDP 不可用時快速降級，TDD）、**F16**（retry 路徑對齊主 pipeline）、F2（卡上游）。M3 的 F1–F8 重驗除 F2 外全綠
 2. 首次排程觸發約 2026-07-12 00:32——看 log「開始執行失敗任務重試」確認真實定時觸發（可補進 F8 evidence 補齊 R4）；預期一波 Telegram 通知

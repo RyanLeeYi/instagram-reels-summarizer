@@ -57,8 +57,9 @@ async def lifespan(app: FastAPI):
     except Exception as e:
         logger.warning(f"設定 webhook 失敗: {e}")
 
-    # 設定排程器的 Bot
+    # 設定排程器的 Bot 與主 pipeline 入口（F16：重試走同一條流程，不再自己維護簡化版）
     retry_scheduler.set_bot(telegram_app.bot)
+    retry_scheduler.set_handler(bot_handler)
 
     # 啟動排程器（如果啟用）
     if settings.retry_enabled:

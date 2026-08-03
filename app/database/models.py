@@ -4,7 +4,7 @@ from datetime import datetime
 from enum import Enum
 from typing import Optional
 
-from sqlalchemy import Column, Integer, String, DateTime, Text, create_engine
+from sqlalchemy import Column, Integer, String, DateTime, Text, create_engine, select
 from sqlalchemy.ext.asyncio import create_async_engine, AsyncSession
 from sqlalchemy.orm import sessionmaker, declarative_base
 
@@ -162,14 +162,21 @@ async def save_processed_url(
         新建立的 ProcessedURL 物件
     """
     async with AsyncSessionLocal() as session:
-        processed = ProcessedURL(
-            url=url,
-            url_type=url_type,
-            telegram_chat_id=chat_id,
-            title=title,
-            note_path=note_path,
-        )
-        session.add(processed)
+        # url 有 unique 約束：同一連結重跑（重試佇列、重新處理）必須是更新而非插入，
+        # 否則 IntegrityError 會被上層誤報成下載失敗（F16 codex review P1）
+        result = await session.execute(select(ProcessedURL).where(ProcessedURL.url == url))
+        processed = result.scalar_one_or_none()
+
+        if processed is None:
+            processed = ProcessedURL(url=url, telegram_chat_id=chat_id)
+            session.add(processed)
+
+        processed.url_type = url_type
+        processed.telegram_chat_id = chat_id
+        processed.title = title
+        processed.note_path = note_path
+        processed.processed_at = datetime.utcnow()
+
         await session.commit()
         await session.refresh(processed)
         return processed
