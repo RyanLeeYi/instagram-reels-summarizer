@@ -11,6 +11,7 @@ from app.config import settings
 from app.database.models import init_db
 from app.bot.telegram_handler import TelegramBotHandler
 from app.scheduler.retry_job import retry_scheduler
+from app.services.chrome_lifecycle import close_owned_chrome, reclaim_orphan_chrome
 
 
 # 設定日誌
@@ -34,6 +35,9 @@ async def lifespan(app: FastAPI):
     # 初始化資料庫
     await init_db()
     logger.info("資料庫初始化完成")
+
+    # 回收上一輪殘留的 CDP Chrome（F19；服務被強制 kill 時 shutdown 收不到）
+    await reclaim_orphan_chrome()
 
     # 建立 Telegram Bot Application
     telegram_app = bot_handler.build_application()
@@ -72,6 +76,10 @@ async def lifespan(app: FastAPI):
     if settings.retry_enabled:
         retry_scheduler.stop()
     await telegram_app.shutdown()
+
+    # 收掉本服務啟動的 CDP Chrome（F19）——使用者自己開的不會被碰
+    await close_owned_chrome()
+
     logger.info("應用程式已關閉")
 
 

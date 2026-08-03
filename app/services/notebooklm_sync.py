@@ -17,6 +17,7 @@ import requests
 
 from app.config import settings
 from app.database.models import get_notebook_by_date, save_or_update_notebook
+from app.services import chrome_lifecycle
 
 
 logger = logging.getLogger(__name__)
@@ -90,15 +91,12 @@ class NotebookLMSyncService:
         return None
 
     def _get_cdp_port(self) -> int:
-        """從 cdp_url 提取 port"""
-        parsed = urlparse(self.cdp_url)
-        return parsed.port or 9222
+        """從 cdp_url 提取 port（單一事實來源在 chrome_lifecycle）"""
+        return chrome_lifecycle.get_cdp_port()
 
     def _get_chrome_profile_dir(self) -> str:
-        """取得 Chrome CDP 專用 user-data-dir"""
-        if settings.notebooklm_chrome_profile:
-            return settings.notebooklm_chrome_profile
-        return os.path.join(os.path.expanduser("~"), ".chrome-cdp-notebooklm")
+        """取得 Chrome CDP 專用 user-data-dir（單一事實來源在 chrome_lifecycle）"""
+        return chrome_lifecycle.get_chrome_profile_dir()
 
     def _is_cdp_running(self) -> bool:
         """檢查 CDP 是否已執行中"""
@@ -151,6 +149,9 @@ class NotebookLMSyncService:
                     stderr=subprocess.DEVNULL,
                     start_new_session=True,
                 )
+
+            # 登記擁有權：本服務起的 Chrome 才可以在服務結束時被關閉（F19）
+            chrome_lifecycle.mark_owned(self._chrome_process.pid)
 
             logger.info(f"Chrome 已啟動 (PID={self._chrome_process.pid})，等待 CDP 就緒...")
             return True
