@@ -1,27 +1,149 @@
 {
   "_note": "既有專案 2026-07-11 追補 harness。歷史上全功能可用（app.db processed_urls 69 筆至 2026-02-23），荒廢近 5 個月後重驗中：有當前 evidence 才標 passing，歷史紀錄不算數。",
   "features": [
-    {"id": "F1", "name": "Reel 影片摘要 e2e（傳連結→下載→轉錄→摘要→Telegram 回覆）", "acceptance": "對 bot 傳一條公開 Reel 連結，收到含語音/畫面內容的繁中摘要；log 無 ERROR", "status": "passing", "evidence": "2026-07-11 20:04 e2e 全通（reel Dag7MtyRNAA）：下載→轉錄→視覺分析 10 幀（Ollama）→Copilot CLI 摘要（claude-opus-4.5）→Telegram 回覆→暫存清理，Ryan 實收摘要。根因修復：yt-dlp 2026.01.19→2026.07.04"},
-    {"id": "F2", "name": "IG 圖文貼文摘要（instaloader 多圖+caption）", "acceptance": "對 bot 傳一條公開圖文貼文連結，收到圖片視覺分析+caption 整合摘要", "status": "failing", "evidence": "2026-07-11 追到第三層：①cookies 無 sessionid（F13 已解）②UA 指紋/context.username 兩個 bug（已修，test_login 過）③**上游 blocker**：IG 改版後 instaloader 4.15.2 的 Post.from_shortcode graphql 回 invalid request（instaloader#2710，2026-07-06 開，全球性壞損無 workaround）。等上游修版，或自建 iPhone API fallback（media/{pk}/info）——待 Ryan 拍板。2026-07-12 複驗：cookies 斷供（CDP Chrome 登出+cookies.txt 無 sessionid，Ryan 重登入後 F13 供應線恢復、sessionid 實測回填）；帶有效 session 直呼 _download_post_sync('DanODm-k8ne') 仍 graphql/query 403 → blocker 未解；上游 issue 仍 OPEN、PyPI 最新仍 4.15.2"},
-    {"id": "F3", "name": "Threads 貼文摘要（含作者串文偵測）", "acceptance": "對 bot 傳一條 Threads 連結，收到貼文（含串文）摘要", "status": "passing", "evidence": "2026-07-11 20:24 e2e 全通（@oneday0013/DajnyLDIKbt）：MetaThreads API login_required → Googlebot SSR fallback 成功（3/27 則）→ Copilot 摘要 → NotebookLM 上傳（F7 修復正式流程驗證）→ Roam 同步"},
-    {"id": "F4", "name": "重複 URL 檢查", "acceptance": "同一連結傳第二次，bot 提示已處理過且不重跑 pipeline", "status": "passing", "evidence": "2026-07-11 20:22 實測：同 reel 重傳 → 「URL 已處理過」提示 + callback 重跑選項，未重跑 pipeline"},
-    {"id": "F5", "name": "摘要 backend 可切換（ollama/claude/copilot）", "acceptance": "改 .env SUMMARIZER_BACKEND 重啟後，log 顯示對應 summarizer 且摘要成功", "status": "passing", "evidence": "2026-07-11 22:20–22:41 三 backend 實測切換（改 .env + 中台重啟）：claude→log「使用 Claude Code CLI (model=sonnet)」+ test_claude_summarize.py 摘要/筆記生成成功；ollama→log「使用 Ollama (model=qwen3:14b)」+ OllamaSummarizer.generate_note 完整筆記；copilot（restore）→log 確認 + 生產 e2e 兩次（20:02 reel、21:33 Threads 筆記生成成功）。全程無 fallback warning。acceptance-verifier 7/7 pass（自行重跑腳本＋直讀 mission-control out.log）"},
-    {"id": "F6", "name": "Roam 本地備份 + 可選 MCP 同步", "acceptance": "摘要完成後 roam_backup/ 出現 Markdown；CLAUDE_CODE_SYNC_ENABLED=true 時 Roam 出現對應頁面", "status": "passing", "evidence": "2026-07-11 20:03 隨 F1 e2e 驗證：roam_backup 落地 + Claude Code 同步成功（IG Reels - 2026-07-11 200247 - Video by drgavingcook）"},
-    {"id": "F7", "name": "NotebookLM 每日 Notebook 自動上傳（Chrome CDP）", "acceptance": "NOTEBOOKLM_ENABLED=true 且 CDP Chrome 在跑時，摘要與媒體上傳到當日 Notebook", "status": "passing", "evidence": "2026-07-11 20:17 修復並實證：根因是 NotebookLM UI 改版成 tab 佈局（來源/對話/工作室），「新增來源」只在來源 tab 內。_click_add_source 加「對話框已開直接過 + 先切來源 tab」。實測把 20:02 失敗的真摘要補傳成功（notebook 顯示 1 個來源）。⚠️ 檔案上傳路徑同修但未實測，下支 reel 看 log 確認"},
-    {"id": "F8", "name": "失敗任務記錄 + 重試排程", "acceptance": "下載失敗寫入 failed_tasks；RETRY_ENABLED=true 時依排程重試最多 3 次", "status": "passing", "evidence": "2026-07-11：①下載失敗寫入——failed_tasks id 25/26/27 真實落庫，與 out.log ERROR 時間戳精確對上（19:42 reel、20:23/21:25 /p/ 貼文）②RETRY_ENABLED=true 重啟 → 22:40:51 log「Scheduler started」+「排程器已啟動，重試間隔: 每 1 小時」③重試上限沙盒（臨時 DB + 直呼排程器同一函式）：retry_count 1→2→3、第 3 次標 abandoned、第 4 週期不再撈起（F8_SANDBOX_OK，verifier 重現）。acceptance-verifier 判 pass；範圍註記：真實 1 小時定時觸發未觀察（APScheduler 第三方行為；營運決策——27 筆 pending 舊案未清前 RETRY_ENABLED 維持 false）"},
-    {"id": "F9", "name": "Webhook 模式接收 Telegram 訊息（Cloudflare tunnel）", "acceptance": "對 bot 傳訊息，log 出現 POST /webhook/telegram 200 且 handler 收到", "status": "passing", "evidence": "2026-07-11 19:42 實收 Ryan 訊息（POST /webhook/telegram 200、handler 記錄訊息 ID 688）；tunnel ingress 8001 已於第三場修正"},
-    {"id": "F10", "name": "單元測試可執行", "acceptance": ".venv\\Scripts\\python.exe -m pytest tests -q 全過", "status": "passing", "evidence": "2026-07-11 補裝 pytest/pytest-asyncio（原 venv 沒有，tests/ 是死的）→ 11 passed（30 個 pydantic V2 deprecation warnings，另列 F11）"},
-    {"id": "F11", "name": "pydantic V2 遷移（消 deprecation warnings）", "acceptance": "pytest 無 PydanticDeprecatedSince20 警告；config.py 改用 json_schema_extra / ConfigDict", "status": "failing", "evidence": null},
-    {"id": "F12", "name": "下載失敗錯誤訊息可行動化 + 無 sessionid 主動告警", "acceptance": "instaloader 未登入/cookies 失效時，Telegram 回覆與 log 顯示「IG 需要登入，請更新 cookies.txt」類訊息，不再是 'NoneType' object is not subscriptable；cookie provider 刷新時發現無 sessionid（CDP 未登入且 cookies.txt 無 session）→ 透過 Telegram 主動告警一次（去重，不洗版），不再只寫 log WARNING（2026-07-12 教訓：登入態斷了 5 天沒人發現，log 警告沒人看）；單元測試覆蓋", "status": "failing", "evidence": null},
-    {"id": "F14", "name": "摘要整併知識庫（取代 NotebookLM）", "acceptance": "規格見 docs/prd/vault-sync.md：寫入 clippings/（沿用命名+frontmatter）、圖片進 assets/clippings/（hash 檔名）、INDEX 同步、LLM 連結 pass（輸出驗證後才 append）、NotebookLM 預設關閉。tests/test_vault_sync.py 全過 + e2e 傳真連結 vault 出現筆記與 INDEX 條目", "status": "passing", "evidence": "2026-07-11 21:32–21:35 bot 全程 e2e（Threads @oneday0013/DajnyLDIKbt 重跑）：vault 寫入 clippings/threads/（frontmatter 齊全）、INDEX 自動 append + updated 更新、連結 pass 加入 [[Redis]]（knowledge/Redis.md 真實存在）、NotebookLM 未執行、log 無 ERROR；Ryan 實收「📚 知識庫」段（換行排版確認 OK）。acceptance-verifier 逐條驗收 8/8 pass（圖片路徑本次樣本純文字未覆蓋，單元測試已驗 hash 命名/連結/缺檔降級）；tests 36 passed（test_vault_sync.py 10）"},
-    {"id": "F16", "name": "retry 路徑對齊主 pipeline", "acceptance": "重試成功的任務產出與主 pipeline 一致：走 vault_sync 入知識庫、影片做視覺分析、/p/ 貼文走 instaloader 貼文路徑（而非 reel 下載）；單元測試覆蓋路由分流", "status": "passing", "evidence": "2026-08-03 TDD（tests/test_retry_pipeline_parity.py 12 tests）＋全套 77 passed。修法＝**委派**而非複製：新增統一入口 TelegramBotHandler.process_url()（型別分流的唯一事實來源），handle_message／reprocess callback／retry 三條路徑共用；handler 改回傳 ProcessResult 並支援 retry_mode（不重複寫 failed_task）；retry_job 刪掉自建的簡化 pipeline，改 main.py 注入 handler 後委派，未注入時明確失敗而非偷跑舊路徑。codex-verify 跨模型驗收 5/5 pass（動態探針實測：Reel 重試依序 download_reel→visual_analyze_video→summarize→vault_upload_reel；/p/ 只出現 download_post／visual_analyze_images／vault_upload_post，無 download_reel）。codex-review 三條全修：P1 委派後同一 URL 重跑會撞 processed_urls unique → save_processed_url 改 upsert（真 DB 實測同 id、title 更新、無 IntegrityError）；P1 重試時 Roam 同步失敗仍回 ok 會讓任務被標 success 而永不同步 → retry_mode 下回 ProcessResult.fail(SYNC)；P2 THREADS_ENABLED=false 時 threads URL 會掉進 IG 貼文下載器空轉重試次數 → 明確拒收。自己踩到並由測試抓到的 bug：貼文轉影片那條一度呼叫 _handle_reel 兩次（整條 pipeline 跑兩遍），已加測試釘住"},
-    {"id": "F15", "name": "CDP 不可用時 cookies 刷新快速降級", "acceptance": "CDP Chrome 未開時，下載前的 cookies 刷新在短暫 timeout（≤10s）內降級沿用既有 cookies.txt 並輸出可行動警告，不再空等 180s；單元測試覆蓋", "status": "failing", "evidence": "2026-07-11 F8 沙盒實測發現：CDP Chrome 未開時每次下載前空等 BrowserType.connect_over_cdp 180s timeout 才降級（服務常態下 Chrome 開著無感，未開時 bot 體感極慢）"},
-    {"id": "F13", "name": "IG cookies 自動供應（CDP Chrome 養 session，免手動匯出）", "acceptance": "在 CDP Chrome（NotebookLM 同一 profile）登入 IG 一次後：下載前自動從 CDP 抽 IG cookies + 瀏覽器 UA 更新 cookies.txt（+.ua sidecar，過期/缺失才刷新）；CDP 不可用或未登入時保留既有檔案並輸出可行動警告；單元測試覆蓋；e2e＝instaloader test_login 以自動供應的 cookies 成功回帳號", "status": "passing", "evidence": "2026-07-11 20:49 e2e 驗證：Ryan 在 CDP Chrome 登入一次後，自動抽 8 cookies+UA → instaloader test_login 回帳號、session 檔儲存成功。過程修掉兩個真 bug：①UA 指紋不一致（session 綁 client，instaloader 預設 UA 被判 cross-client 拒絕→UA sidecar 同步供應）②cookie 注入漏設 context.username（instaloader 以它判 is_logged_in）。TDD 全程，26 tests passed"}
-  ,
-    {"id": "F17", "name": "Threads /share/ 短連結支援", "acceptance": "對 bot 傳一條 threads.com/share/<code> 短連結（分享/複製連結產生的格式），能被辨識為 Threads 連結並正常走 Threads 摘要流程：①telegram_handler 的 THREADS_URL_PATTERN 匹配 /share/<code> ②ThreadsDownloader.validate_url 接受 /share/<code> ③download() 對 share 連結先跟隨 302 轉址取得正規 /@user/post/<id> URL 再解析 post_id ④轉址失敗時降級回原 url 且不 crash；單元測試覆蓋", "status": "passing", "evidence": "2026-07-23 TDD：新增 tests/test_threads_share_url.py 10 tests（validate_url/is_share_url/_resolve_share_url 轉址+降級/download 正規化/handler pattern）先 RED 後 GREEN；全套件 46 passed。真實 e2e：share/BAUrkxxv3Q → 跟隨 302 → @dustin_gmat/post/DbHiGmWD10O，extract_post_id 正確取得 DbHiGmWD10O。實作＝threads_downloader THREADS_URL_PATTERNS+SHARE_URL_PATTERN、is_share_url、_resolve_share_url（去 query、失敗降級）、download() 先正規化；telegram_handler THREADS_URL_PATTERN 加 share 分支"}
-  ,
-    {"id": "F19", "name": "CDP Chrome 生命週期收斂（停止時收掉、啟動時收養殘留）", "acceptance": "規格見 docs/prd/chrome-cdp-lifecycle.md（2026-08-03 Ryan 簽核）。停止：服務走完 uvicorn lifespan shutdown 時，若 CDP Chrome 為本服務所擁有，該 Chrome 連同子程序一併關閉且 port 9222 不再回應；非本服務啟動（服務啟動前就已在執行）的 Chrome 不得被關閉。啟動：lifespan startup 依狀態檔判定回收——狀態檔存在、port 有回應且檔中 PID 仍是存活的 chrome.exe 時收養該殘留 Chrome（標記為擁有、不重啟它，使其於本輪結束時被關閉）；狀態檔不存在、PID 已死或非 chrome、port 無回應、狀態檔毀損等情況一律不擁有並清掉無效狀態檔。擁有權記錄於模組層級並持久化到 profile 目錄下的狀態檔（啟動 Chrome 成功時寫、成功關閉後刪），跨多次 NotebookLMSyncService 實例與跨行程皆有效。關閉流程先走 CDP graceful（關閉所有 target 並輪詢 port 上限 5 秒），逾時才強制 kill process tree；startup 與 shutdown 兩側任何失敗只記 WARNING、不拋錯、不阻塞（各自增加耗時 < 10 秒）。測試：單元測試以 mock 覆蓋擁有／不擁有／跨實例／graceful 成功不強殺／逾時才強殺／例外不外漏，以及回收判定表五種情境；真實驗證涵蓋「本服務啟動的會被關」「手動開的不被關」「崩潰殘留於下次啟動被收養且不重開」三種情境並附 log 證據", "status": "passing", "evidence": "2026-08-03 TDD（tests/test_chrome_lifecycle.py 19 tests RED→GREEN，全套 65 passed，原 46）＋三情境真實驗證：①本服務啟動的會被關——PID 8684 起、狀態檔寫入 ~/.chrome-cdp-notebooklm/.owned-by-reels.json，close_owned_chrome 後 port 9222 無回應、狀態檔刪除、owned_pid 歸零 ②手動開的不被關——無狀態檔的 CDP Chrome（PID 41592 手動啟動），中台 start(11:02)→stop 後 9222 仍有回應 ③崩潰殘留被收養——殘留 PID 45664，中台 start 時 log「♻️ 收養上一輪殘留的 CDP Chrome (PID=45664)，將於本次服務結束時關閉」且未重開（PID 不變），中台 stop（11:20:29→11:20:54）後 PID 45664 消失、9222 無回應、狀態檔已清除。/codex-review：P1（關閉前先刪狀態檔會讓異常結束的殘留永遠收不回，破壞回收核心）已修為「確認關掉才刪」並加反例測試；P2 強殺未納入預算、P2 非 Windows 未殺 process group 均已修。/codex-verify 跨模型驗收 9 pass／3 unverified（unverified 全因驗收者環境限制：無 mission-control 介面、其臨時 Chrome 以 0x80000003 自退，無法搭出 live orphan），Ryan 2026-08-03 拍板採信本輪實測證據改 passing。實測教訓：原始收尾耗時 20.12 秒（每個 CDP HTTP 呼叫 2s 逾時×多 target＋輪詢）超過中台 10 秒 grace，行程在清檔前被強殺——改總預算制（HTTP 逾時 1s、graceful 60%／輪詢 40%、強殺亦綁預算），修後實測 6.06s"}
-  ,
-    {"id": "F20", "name": "init.ps1 依賴安裝失敗不得 exit 0", "acceptance": "init.ps1 在任一 pip install 失敗（例：metathreads>=1.0.0 於 PyPI 已不存在）時以非零 exit code 結束且不印 'init OK'，並明確列出失敗的套件；全新環境恢復失敗不得被誤判成功", "status": "failing", "evidence": "2026-08-03 codex-verify F19 時發現：pip 輸出 'No matching distribution found for metathreads>=1.0.0'，init.ps1 仍 exit 0 並印 init OK。與 2026-07-28 教訓同型（fail-open 的防線壞掉時不噴錯，只會安靜放行）"}
+    {
+      "id": "F1",
+      "name": "Reel 影片摘要 e2e（傳連結→下載→轉錄→摘要→Telegram 回覆）",
+      "acceptance": "對 bot 傳一條公開 Reel 連結，收到含語音/畫面內容的繁中摘要；log 無 ERROR",
+      "status": "passing",
+      "evidence": "2026-07-11 20:04 e2e 全通（reel Dag7MtyRNAA）：下載→轉錄→視覺分析 10 幀（Ollama）→Copilot CLI 摘要（claude-opus-4.5）→Telegram 回覆→暫存清理，Ryan 實收摘要。根因修復：yt-dlp 2026.01.19→2026.07.04"
+    },
+    {
+      "id": "F2",
+      "name": "IG 圖文貼文摘要（instaloader 多圖+caption）",
+      "acceptance": "對 bot 傳一條公開圖文貼文連結，收到圖片視覺分析+caption 整合摘要",
+      "status": "failing",
+      "evidence": "2026-07-11 追到第三層：①cookies 無 sessionid（F13 已解）②UA 指紋/context.username 兩個 bug（已修，test_login 過）③**上游 blocker**：IG 改版後 instaloader 4.15.2 的 Post.from_shortcode graphql 回 invalid request（instaloader#2710，2026-07-06 開，全球性壞損無 workaround）。等上游修版，或自建 iPhone API fallback（media/{pk}/info）——待 Ryan 拍板。2026-07-12 複驗：cookies 斷供（CDP Chrome 登出+cookies.txt 無 sessionid，Ryan 重登入後 F13 供應線恢復、sessionid 實測回填）；帶有效 session 直呼 _download_post_sync('DanODm-k8ne') 仍 graphql/query 403 → blocker 未解；上游 issue 仍 OPEN、PyPI 最新仍 4.15.2",
+      "prerequisites": [
+        "F13"
+      ]
+    },
+    {
+      "id": "F3",
+      "name": "Threads 貼文摘要（含作者串文偵測）",
+      "acceptance": "對 bot 傳一條 Threads 連結，收到貼文（含串文）摘要",
+      "status": "passing",
+      "evidence": "2026-07-11 20:24 e2e 全通（@oneday0013/DajnyLDIKbt）：MetaThreads API login_required → Googlebot SSR fallback 成功（3/27 則）→ Copilot 摘要 → NotebookLM 上傳（F7 修復正式流程驗證）→ Roam 同步"
+    },
+    {
+      "id": "F4",
+      "name": "重複 URL 檢查",
+      "acceptance": "同一連結傳第二次，bot 提示已處理過且不重跑 pipeline",
+      "status": "passing",
+      "evidence": "2026-07-11 20:22 實測：同 reel 重傳 → 「URL 已處理過」提示 + callback 重跑選項，未重跑 pipeline"
+    },
+    {
+      "id": "F5",
+      "name": "摘要 backend 可切換（ollama/claude/copilot）",
+      "acceptance": "改 .env SUMMARIZER_BACKEND 重啟後，log 顯示對應 summarizer 且摘要成功",
+      "status": "passing",
+      "evidence": "2026-07-11 22:20–22:41 三 backend 實測切換（改 .env + 中台重啟）：claude→log「使用 Claude Code CLI (model=sonnet)」+ test_claude_summarize.py 摘要/筆記生成成功；ollama→log「使用 Ollama (model=qwen3:14b)」+ OllamaSummarizer.generate_note 完整筆記；copilot（restore）→log 確認 + 生產 e2e 兩次（20:02 reel、21:33 Threads 筆記生成成功）。全程無 fallback warning。acceptance-verifier 7/7 pass（自行重跑腳本＋直讀 mission-control out.log）"
+    },
+    {
+      "id": "F6",
+      "name": "Roam 本地備份 + 可選 MCP 同步",
+      "acceptance": "摘要完成後 roam_backup/ 出現 Markdown；CLAUDE_CODE_SYNC_ENABLED=true 時 Roam 出現對應頁面",
+      "status": "passing",
+      "evidence": "2026-07-11 20:03 隨 F1 e2e 驗證：roam_backup 落地 + Claude Code 同步成功（IG Reels - 2026-07-11 200247 - Video by drgavingcook）"
+    },
+    {
+      "id": "F7",
+      "name": "NotebookLM 每日 Notebook 自動上傳（Chrome CDP）",
+      "acceptance": "NOTEBOOKLM_ENABLED=true 且 CDP Chrome 在跑時，摘要與媒體上傳到當日 Notebook",
+      "status": "passing",
+      "evidence": "2026-07-11 20:17 修復並實證：根因是 NotebookLM UI 改版成 tab 佈局（來源/對話/工作室），「新增來源」只在來源 tab 內。_click_add_source 加「對話框已開直接過 + 先切來源 tab」。實測把 20:02 失敗的真摘要補傳成功（notebook 顯示 1 個來源）。⚠️ 檔案上傳路徑同修但未實測，下支 reel 看 log 確認"
+    },
+    {
+      "id": "F8",
+      "name": "失敗任務記錄 + 重試排程",
+      "acceptance": "下載失敗寫入 failed_tasks；RETRY_ENABLED=true 時依排程重試最多 3 次",
+      "status": "passing",
+      "evidence": "2026-07-11：①下載失敗寫入——failed_tasks id 25/26/27 真實落庫，與 out.log ERROR 時間戳精確對上（19:42 reel、20:23/21:25 /p/ 貼文）②RETRY_ENABLED=true 重啟 → 22:40:51 log「Scheduler started」+「排程器已啟動，重試間隔: 每 1 小時」③重試上限沙盒（臨時 DB + 直呼排程器同一函式）：retry_count 1→2→3、第 3 次標 abandoned、第 4 週期不再撈起（F8_SANDBOX_OK，verifier 重現）。acceptance-verifier 判 pass；範圍註記：真實 1 小時定時觸發未觀察（APScheduler 第三方行為；營運決策——27 筆 pending 舊案未清前 RETRY_ENABLED 維持 false）"
+    },
+    {
+      "id": "F9",
+      "name": "Webhook 模式接收 Telegram 訊息（Cloudflare tunnel）",
+      "acceptance": "對 bot 傳訊息，log 出現 POST /webhook/telegram 200 且 handler 收到",
+      "status": "passing",
+      "evidence": "2026-07-11 19:42 實收 Ryan 訊息（POST /webhook/telegram 200、handler 記錄訊息 ID 688）；tunnel ingress 8001 已於第三場修正"
+    },
+    {
+      "id": "F10",
+      "name": "單元測試可執行",
+      "acceptance": ".venv\\Scripts\\python.exe -m pytest tests -q 全過",
+      "status": "passing",
+      "evidence": "2026-07-11 補裝 pytest/pytest-asyncio（原 venv 沒有，tests/ 是死的）→ 11 passed（30 個 pydantic V2 deprecation warnings，另列 F11）"
+    },
+    {
+      "id": "F11",
+      "name": "pydantic V2 遷移（消 deprecation warnings）",
+      "acceptance": "pytest 無 PydanticDeprecatedSince20 警告；config.py 改用 json_schema_extra / ConfigDict",
+      "status": "failing",
+      "evidence": null,
+      "prerequisites": []
+    },
+    {
+      "id": "F12",
+      "name": "下載失敗錯誤訊息可行動化 + 無 sessionid 主動告警",
+      "acceptance": "instaloader 未登入/cookies 失效時，Telegram 回覆與 log 顯示「IG 需要登入，請更新 cookies.txt」類訊息，不再是 'NoneType' object is not subscriptable；cookie provider 刷新時發現無 sessionid（CDP 未登入且 cookies.txt 無 session）→ 透過 Telegram 主動告警一次（去重，不洗版），不再只寫 log WARNING（2026-07-12 教訓：登入態斷了 5 天沒人發現，log 警告沒人看）；單元測試覆蓋",
+      "status": "failing",
+      "evidence": null,
+      "prerequisites": [
+        "F13"
+      ]
+    },
+    {
+      "id": "F14",
+      "name": "摘要整併知識庫（取代 NotebookLM）",
+      "acceptance": "規格見 docs/prd/vault-sync.md：寫入 clippings/（沿用命名+frontmatter）、圖片進 assets/clippings/（hash 檔名）、INDEX 同步、LLM 連結 pass（輸出驗證後才 append）、NotebookLM 預設關閉。tests/test_vault_sync.py 全過 + e2e 傳真連結 vault 出現筆記與 INDEX 條目",
+      "status": "passing",
+      "evidence": "2026-07-11 21:32–21:35 bot 全程 e2e（Threads @oneday0013/DajnyLDIKbt 重跑）：vault 寫入 clippings/threads/（frontmatter 齊全）、INDEX 自動 append + updated 更新、連結 pass 加入 [[Redis]]（knowledge/Redis.md 真實存在）、NotebookLM 未執行、log 無 ERROR；Ryan 實收「📚 知識庫」段（換行排版確認 OK）。acceptance-verifier 逐條驗收 8/8 pass（圖片路徑本次樣本純文字未覆蓋，單元測試已驗 hash 命名/連結/缺檔降級）；tests 36 passed（test_vault_sync.py 10）"
+    },
+    {
+      "id": "F16",
+      "name": "retry 路徑對齊主 pipeline",
+      "acceptance": "重試成功的任務產出與主 pipeline 一致：走 vault_sync 入知識庫、影片做視覺分析、/p/ 貼文走 instaloader 貼文路徑（而非 reel 下載）；單元測試覆蓋路由分流",
+      "status": "passing",
+      "evidence": "2026-08-03 TDD（tests/test_retry_pipeline_parity.py 12 tests）＋全套 77 passed。修法＝**委派**而非複製：新增統一入口 TelegramBotHandler.process_url()（型別分流的唯一事實來源），handle_message／reprocess callback／retry 三條路徑共用；handler 改回傳 ProcessResult 並支援 retry_mode（不重複寫 failed_task）；retry_job 刪掉自建的簡化 pipeline，改 main.py 注入 handler 後委派，未注入時明確失敗而非偷跑舊路徑。codex-verify 跨模型驗收 5/5 pass（動態探針實測：Reel 重試依序 download_reel→visual_analyze_video→summarize→vault_upload_reel；/p/ 只出現 download_post／visual_analyze_images／vault_upload_post，無 download_reel）。codex-review 三條全修：P1 委派後同一 URL 重跑會撞 processed_urls unique → save_processed_url 改 upsert（真 DB 實測同 id、title 更新、無 IntegrityError）；P1 重試時 Roam 同步失敗仍回 ok 會讓任務被標 success 而永不同步 → retry_mode 下回 ProcessResult.fail(SYNC)；P2 THREADS_ENABLED=false 時 threads URL 會掉進 IG 貼文下載器空轉重試次數 → 明確拒收。自己踩到並由測試抓到的 bug：貼文轉影片那條一度呼叫 _handle_reel 兩次（整條 pipeline 跑兩遍），已加測試釘住"
+    },
+    {
+      "id": "F15",
+      "name": "CDP 不可用時 cookies 刷新快速降級",
+      "acceptance": "CDP Chrome 未開時，下載前的 cookies 刷新在短暫 timeout（≤10s）內降級沿用既有 cookies.txt 並輸出可行動警告，不再空等 180s；單元測試覆蓋",
+      "status": "failing",
+      "evidence": "2026-07-11 F8 沙盒實測發現：CDP Chrome 未開時每次下載前空等 BrowserType.connect_over_cdp 180s timeout 才降級（服務常態下 Chrome 開著無感，未開時 bot 體感極慢）",
+      "prerequisites": [
+        "F13"
+      ]
+    },
+    {
+      "id": "F13",
+      "name": "IG cookies 自動供應（CDP Chrome 養 session，免手動匯出）",
+      "acceptance": "在 CDP Chrome（NotebookLM 同一 profile）登入 IG 一次後：下載前自動從 CDP 抽 IG cookies + 瀏覽器 UA 更新 cookies.txt（+.ua sidecar，過期/缺失才刷新）；CDP 不可用或未登入時保留既有檔案並輸出可行動警告；單元測試覆蓋；e2e＝instaloader test_login 以自動供應的 cookies 成功回帳號",
+      "status": "passing",
+      "evidence": "2026-07-11 20:49 e2e 驗證：Ryan 在 CDP Chrome 登入一次後，自動抽 8 cookies+UA → instaloader test_login 回帳號、session 檔儲存成功。過程修掉兩個真 bug：①UA 指紋不一致（session 綁 client，instaloader 預設 UA 被判 cross-client 拒絕→UA sidecar 同步供應）②cookie 注入漏設 context.username（instaloader 以它判 is_logged_in）。TDD 全程，26 tests passed"
+    },
+    {
+      "id": "F17",
+      "name": "Threads /share/ 短連結支援",
+      "acceptance": "對 bot 傳一條 threads.com/share/<code> 短連結（分享/複製連結產生的格式），能被辨識為 Threads 連結並正常走 Threads 摘要流程：①telegram_handler 的 THREADS_URL_PATTERN 匹配 /share/<code> ②ThreadsDownloader.validate_url 接受 /share/<code> ③download() 對 share 連結先跟隨 302 轉址取得正規 /@user/post/<id> URL 再解析 post_id ④轉址失敗時降級回原 url 且不 crash；單元測試覆蓋",
+      "status": "passing",
+      "evidence": "2026-07-23 TDD：新增 tests/test_threads_share_url.py 10 tests（validate_url/is_share_url/_resolve_share_url 轉址+降級/download 正規化/handler pattern）先 RED 後 GREEN；全套件 46 passed。真實 e2e：share/BAUrkxxv3Q → 跟隨 302 → @dustin_gmat/post/DbHiGmWD10O，extract_post_id 正確取得 DbHiGmWD10O。實作＝threads_downloader THREADS_URL_PATTERNS+SHARE_URL_PATTERN、is_share_url、_resolve_share_url（去 query、失敗降級）、download() 先正規化；telegram_handler THREADS_URL_PATTERN 加 share 分支"
+    },
+    {
+      "id": "F19",
+      "name": "CDP Chrome 生命週期收斂（停止時收掉、啟動時收養殘留）",
+      "acceptance": "規格見 docs/prd/chrome-cdp-lifecycle.md（2026-08-03 Ryan 簽核）。停止：服務走完 uvicorn lifespan shutdown 時，若 CDP Chrome 為本服務所擁有，該 Chrome 連同子程序一併關閉且 port 9222 不再回應；非本服務啟動（服務啟動前就已在執行）的 Chrome 不得被關閉。啟動：lifespan startup 依狀態檔判定回收——狀態檔存在、port 有回應且檔中 PID 仍是存活的 chrome.exe 時收養該殘留 Chrome（標記為擁有、不重啟它，使其於本輪結束時被關閉）；狀態檔不存在、PID 已死或非 chrome、port 無回應、狀態檔毀損等情況一律不擁有並清掉無效狀態檔。擁有權記錄於模組層級並持久化到 profile 目錄下的狀態檔（啟動 Chrome 成功時寫、成功關閉後刪），跨多次 NotebookLMSyncService 實例與跨行程皆有效。關閉流程先走 CDP graceful（關閉所有 target 並輪詢 port 上限 5 秒），逾時才強制 kill process tree；startup 與 shutdown 兩側任何失敗只記 WARNING、不拋錯、不阻塞（各自增加耗時 < 10 秒）。測試：單元測試以 mock 覆蓋擁有／不擁有／跨實例／graceful 成功不強殺／逾時才強殺／例外不外漏，以及回收判定表五種情境；真實驗證涵蓋「本服務啟動的會被關」「手動開的不被關」「崩潰殘留於下次啟動被收養且不重開」三種情境並附 log 證據",
+      "status": "passing",
+      "evidence": "2026-08-03 TDD（tests/test_chrome_lifecycle.py 19 tests RED→GREEN，全套 65 passed，原 46）＋三情境真實驗證：①本服務啟動的會被關——PID 8684 起、狀態檔寫入 ~/.chrome-cdp-notebooklm/.owned-by-reels.json，close_owned_chrome 後 port 9222 無回應、狀態檔刪除、owned_pid 歸零 ②手動開的不被關——無狀態檔的 CDP Chrome（PID 41592 手動啟動），中台 start(11:02)→stop 後 9222 仍有回應 ③崩潰殘留被收養——殘留 PID 45664，中台 start 時 log「♻️ 收養上一輪殘留的 CDP Chrome (PID=45664)，將於本次服務結束時關閉」且未重開（PID 不變），中台 stop（11:20:29→11:20:54）後 PID 45664 消失、9222 無回應、狀態檔已清除。/codex-review：P1（關閉前先刪狀態檔會讓異常結束的殘留永遠收不回，破壞回收核心）已修為「確認關掉才刪」並加反例測試；P2 強殺未納入預算、P2 非 Windows 未殺 process group 均已修。/codex-verify 跨模型驗收 9 pass／3 unverified（unverified 全因驗收者環境限制：無 mission-control 介面、其臨時 Chrome 以 0x80000003 自退，無法搭出 live orphan），Ryan 2026-08-03 拍板採信本輪實測證據改 passing。實測教訓：原始收尾耗時 20.12 秒（每個 CDP HTTP 呼叫 2s 逾時×多 target＋輪詢）超過中台 10 秒 grace，行程在清檔前被強殺——改總預算制（HTTP 逾時 1s、graceful 60%／輪詢 40%、強殺亦綁預算），修後實測 6.06s"
+    },
+    {
+      "id": "F20",
+      "name": "init.ps1 依賴安裝失敗不得 exit 0",
+      "acceptance": "init.ps1 在任一 pip install 失敗（例：metathreads>=1.0.0 於 PyPI 已不存在）時以非零 exit code 結束且不印 'init OK'，並明確列出失敗的套件；全新環境恢復失敗不得被誤判成功",
+      "status": "failing",
+      "evidence": "2026-08-03 codex-verify F19 時發現：pip 輸出 'No matching distribution found for metathreads>=1.0.0'，init.ps1 仍 exit 0 並印 init OK。與 2026-07-28 教訓同型（fail-open 的防線壞掉時不噴錯，只會安靜放行）",
+      "prerequisites": []
+    }
   ]
 }
