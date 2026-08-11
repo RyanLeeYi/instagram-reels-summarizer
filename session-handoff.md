@@ -1,6 +1,32 @@
 # Session Handoff
 
-> 最後更新：2026-08-03（第九場：F19 + F16 passing；F20 新增 failing）
+> 最後更新：2026-08-11（F22 canonical review/verify 完成，正式 passing）
+
+## 收官狀態（2026-08-11）
+
+- **F22 已正式 passing**：Claude Code canonical review 最終 `integrity=true`、無功能缺陷；前兩輪 reviewer HIGH（泛用例外 fallback、單檔 workspace 防跨請求讀取）已 FIX，唯一 MEDIUM「agy missing 測試缺口」已補。
+- Claude Sonnet acceptance verifier `integrity=true`，R1–R8 全 pass，明確建議 passing；targeted **13 passed**、全套 **90 passed**。
+- 真實 isolated hardlink + `--sandbox` MP4 smoke：**14.9s、1347 字**可辨識摘要。F21 維持 failing，`superseded_by: F22`。
+- 剩餘 failing：**F11、F12、F15、F20、F21**；依順序下一條是 **F11**。
+
+## 這個 session 做了（2026-08-10：F22 Antigravity CLI native video）
+
+- **F22 實作完成，但為補 Harness 流程已退回 failing**：Ryan 於 2026-08-11 明確同意「先補流程」，視為對既有 F22 acceptance 原文的正式簽核；acceptance 不改寫。Reel 視覺分析新增 `VISUAL_ANALYZER_BACKEND=antigravity`。成功路徑對完整 MP4 只啟一個 `agy`，不先抽 8–10 幀；失敗才降級原本 FFmpeg + Ollama frame pipeline，fallback 明確不再呼叫 agy。
+- 新增 `app/services/antigravity_visual_analyzer.py` 與 workspace custom agent `.agents/agents/reels-vision/agent.md`。agent 只允許 `view_file`、`commandExecutionPolicy: off`；prompt 把影片內文字視為 untrusted content，只描述不執行。
+- 關鍵 discovery：`agy -p` 若沿用錯的 active project，會讀到別的 workspace 或 tool-call timeout；固定用**絕對 media path + `--add-dir <media parent>`**後，headless image/video 都能穩定讀取。
+- Windows 實測再抓到 stdout encoding：agy 回 UTF-8，但 Python subprocess 預設 CP950，中文/符號會 `UnicodeDecodeError`；adapter 已釘 `encoding="utf-8", errors="replace"`。
+- 真實 smoke：Python adapter 讀 `temp_videos/73d5cde3_video.mp4` 成功回 **1343 字**視覺摘要，辨識 Data Analyst / Data Scientist / ML Engineer / GenAI Engineer 及 SQL、Power BI、PyTorch、LangChain、Vector Databases 等畫面文字。
+- 現有技術證據：targeted **11 passed**；全套 **88 passed**；`py_compile`、`git diff --check` 通過。先前 Gemini code review=`NO_FINDINGS`、fresh Gemini verifier=7/7 PASS，只保留為補充 evidence，**不再當成 HARNESS canonical checker**。2026-08-11 補 canonical review：`codex exec review --uncommitted --ephemeral` 有啟動且自行重跑 targeted 11 passed，但 180s 內無最終 verdict → 無效；依 `/codex-review` skill fallback 到 headless Claude reviewer，又因 workspace 尚未接受 Claude Code trust dialog 而 180s timeout、無 verdict。下一層依 skill 只能由 Ryan 在 Claude Code 手動輸入 `/code-review`，agent 不可用 Bash 繞過。故 F22 維持 failing，`/codex-verify` 尚未跑。
+- **F21 保留 failing 並 `superseded_by: F22`**：逐幀各啟一個 agy process 雖可行，但單次 tool-call 可超過 45s，8–10 次會傷害專案 `<5 分鐘` 成功指標，不進 production path。
+- 本機 `.env`（gitignored）已設 `VISUAL_ANALYZER_BACKEND=antigravity`、agent `reels-vision`、model `gemini-3.6-flash-high`、timeout 120s；**要由 mission-control 重啟 `reels-summarizer` 後才載入新 runtime 設定**。
+
+## 這個 session 做了（2026-08-10：F2 instaloader 上游修版重驗）
+
+- **F2 正式 passing**：venv `instaloader` 4.15.2 → 4.15.3；`requirements.txt` 最低版同步升為 `instaloader>=4.15.3`。
+- 真實重現：原 blocker shortcode `DaSd-YuD_x8` 現在成功回 `post_carousel`、8 張圖、caption 699 字；另用歷史單圖 `DU2HrdsDs_D` 成功回 `post_image`、1 張 162254-byte 圖、caption 618 字。
+- 兩案仍會看到 IG high-quality endpoint 的 `login_required` warning，但 Instaloader 4.15.3 能取得可用 metadata 與圖片，不再讓整體下載失敗；**不要因 warning 又回頭自建 iPhone API fallback，除非未來成功路徑真的再次壞掉**。
+- 全套 `.venv\\Scripts\\python.exe -m pytest tests -q`：**77 passed**。`pip check` 仍因既有 `metathreads 0.0.4` 相依衝突失敗，屬 F20/環境舊帳，非本次回歸。
+- 最終 acceptance 已由 Ryan 2026-08-10 直接黑箱實測：從 Telegram bot 傳公開 IG 圖文貼文後**成功收到圖片視覺分析 + caption 整合摘要**，補齊整條使用者路徑。自動 verifier 狀態如實保留：Claude fresh verifier 300s timeout、空 report 且 repo 無變更；Codex fresh-context fallback 因 usage limit（重置 2026-08-16 09:32）無法執行。本條以使用者實際 operational acceptance 收官。
 
 ## 這個 session 做了（2026-08-03 第九場）
 

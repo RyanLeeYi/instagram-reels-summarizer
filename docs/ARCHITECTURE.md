@@ -13,7 +13,7 @@ downloader.py（yt-dlp + cookies.txt）        downloader.download_post（instal
    │                                         threads_downloader.py（Googlebot SSR）
    ▼
 transcriber.py（faster-whisper 本地轉錄）
-visual_analyzer.py（Ollama vision 逐幀分析，並行）
+visual_analyzer.py（Antigravity native video 可選；失敗降級 FFmpeg + Ollama 逐幀）
    │
    ▼
 summarizer_factory.py → ollama / claude CLI / copilot CLI（SUMMARIZER_BACKEND 切換）
@@ -34,7 +34,8 @@ app/
     downloader.py     IG 下載唯一出口（yt-dlp 影音 / instaloader 圖文+caption）
     threads_downloader.py   Threads 貼文與串文
     transcriber.py    faster-whisper 語音轉文字
-    visual_analyzer.py      Ollama vision 幀分析
+    visual_analyzer.py      視覺分析路由：Antigravity native video / Ollama frame fallback
+    antigravity_visual_analyzer.py  agy headless 多模態 adapter（restricted reels-vision agent）
     summarizer_factory.py   摘要 backend 工廠（ollama/claude/copilot）
     roam_sync.py      本地備份 + Roam MCP 同步
     notebooklm_sync.py      NotebookLM 上傳（Chrome CDP）
@@ -56,6 +57,7 @@ tests/                pytest（test_downloader / test_summarizer）
 |------|------|----------|
 | cookies.txt（IG 登入態） | yt-dlp / instaloader 認證 | 登入牆內容 empty media response / LoginRequired |
 | yt-dlp 版本 | IG 改版跟進 | 舊版一律 empty media response（2026-07-11 教訓） |
-| Ollama（中台管理） | vision 分析 / ollama backend | 幀分析失敗 |
+| Antigravity CLI (`agy`) | 可選 native video vision backend | timeout/CLI 不可用時自動降級 Ollama |
+| Ollama（中台管理） | vision fallback / ollama backend | Antigravity 不可用時仍可逐幀分析 |
 | Copilot / Claude CLI 登入態 | 雲端摘要 backend | 摘要步驟失敗 |
 | Chrome CDP profile | NotebookLM 上傳 | F7 失敗，主流程不受影響 |

@@ -12,6 +12,10 @@ from typing import List, Optional
 import ollama
 
 from app.config import settings
+from app.services.antigravity_visual_analyzer import (
+    AntigravityAnalysisError,
+    AntigravityCLIFrameAnalyzer,
+)
 
 
 logger = logging.getLogger(__name__)
@@ -89,6 +93,13 @@ class VideoVisualAnalyzer:
     def __init__(self):
         self.temp_dir = settings.temp_video_path
         self.vision_model = settings.ollama_vision_model
+        self.visual_backend = settings.visual_analyzer_backend.strip().lower()
+        self.antigravity_analyzer = AntigravityCLIFrameAnalyzer(
+            cli_path=settings.antigravity_cli_path,
+            agent_name=settings.antigravity_vision_agent,
+            model=settings.antigravity_vision_model,
+            timeout_seconds=settings.antigravity_vision_timeout_seconds,
+        )
 
     def _get_video_duration(self, video_path: Path) -> float:
         """
@@ -179,12 +190,33 @@ class VideoVisualAnalyzer:
             return base64.b64encode(f.read()).decode("utf-8")
 
     def _analyze_frame_sync(self, image_path: Path, frame_index: int, total_frames: int, duration: float) -> FrameDescription:
-        """同步分析單幀"""
-        try:
-            # 計算時間戳（根據幀在影片中的位置）
+        """依設定的 backend 同步分析單幀；Antigravity 失敗時降級 Ollama。"""
+        if self.visual_backend == "antigravity":
             timestamp = (frame_index / total_frames) * duration if total_frames > 0 else 0
-            
-            # 使用 MiniCPM-V 分析圖片
+            try:
+                description = self.antigravity_analyzer.analyze_frame(image_path)
+                return FrameDescription(timestamp=timestamp, description=description)
+            except AntigravityAnalysisError as exc:
+                logger.warning(
+                    "Antigravity 分析幀 %s 失敗，降級 Ollama: %s",
+                    frame_index,
+                    exc,
+                )
+        elif self.visual_backend != "ollama":
+            logger.warning(
+                "未知 VISUAL_ANALYZER_BACKEND=%s，使用 Ollama",
+                self.visual_backend,
+            )
+
+        return self._analyze_frame_with_ollama_sync(
+            image_path, frame_index, total_frames, duration
+        )
+
+    def _analyze_frame_with_ollama_sync(self, image_path: Path, frame_index: int, total_frames: int, duration: float) -> FrameDescription:
+        """既有 Ollama 單幀分析實作。"""
+        try:
+            timestamp = (frame_index / total_frames) * duration if total_frames > 0 else 0
+
             response = ollama.chat(
                 model=self.vision_model,
                 messages=[
@@ -204,19 +236,18 @@ class VideoVisualAnalyzer:
                 ],
                 options={
                     "temperature": 0.3,
-                    "num_predict": 1500,  # 需要足夠空間給 thinking + 詳細描述
+                    "num_predict": 1500,
                 }
             )
-            
+
             description = response["message"]["content"].strip()
-            # 移除 thinking 標籤內容
             description = strip_thinking_tags(description)
-            
+
             return FrameDescription(
                 timestamp=timestamp,
                 description=description
             )
-            
+
         except Exception as e:
             logger.error(f"分析幀 {frame_index} 失敗: {e}")
             timestamp = (frame_index / total_frames) * duration if total_frames > 0 else 0
@@ -510,74 +541,90 @@ class VideoVisualAnalyzer:
             )
 
     async def analyze(self, video_path: Path) -> VisualAnalysisResult:
-        """
-        分析影片視覺內容
-        
-        Args:
-            video_path: 影片檔案路徑
-            
-        Returns:
-            VisualAnalysisResult: 視覺分析結果
-        """
+        """分析影片；Antigravity native video 失敗時降級既有 Ollama frame pipeline。"""
+        if self.visual_backend == "antigravity":
+            logger.info("使用 Antigravity CLI 直接分析完整影片")
+            loop = asyncio.get_event_loop()
+            try:
+                summary = await loop.run_in_executor(
+                    None, self.antigravity_analyzer.analyze_video, video_path
+                )
+                logger.info("Antigravity native video 視覺分析完成")
+                return VisualAnalysisResult(
+                    success=True,
+                    frame_descriptions=[
+                        FrameDescription(timestamp=0.0, description=summary)
+                    ],
+                    overall_visual_summary=summary,
+                )
+            except Exception as exc:
+                logger.warning(
+                    "Antigravity native video 分析失敗，降級 FFmpeg + Ollama: %s",
+                    exc,
+                )
+        elif self.visual_backend != "ollama":
+            logger.warning(
+                "未知 VISUAL_ANALYZER_BACKEND=%s，使用 Ollama",
+                self.visual_backend,
+            )
+
+        return await self._analyze_video_with_ollama_frames(video_path)
+
+    async def _analyze_video_with_ollama_frames(self, video_path: Path) -> VisualAnalysisResult:
+        """既有 FFmpeg 抽幀 + Ollama 視覺分析 pipeline。"""
         try:
-            # 取得影片長度
             duration = self._get_video_duration(video_path)
-            
-            # 截取關鍵幀
+
             logger.info("正在截取影片關鍵幀...")
             frames = self._extract_frames(video_path)
-            
+
             if not frames:
                 return VisualAnalysisResult(
                     success=False,
                     error_message="無法從影片截取幀"
                 )
-            
-            # 分析每一幀（並行處理）
+
             total_frames = len(frames)
             logger.info(f"正在並行分析 {total_frames} 個關鍵幀（並行度: {self.PARALLEL_ANALYSIS}）...")
             loop = asyncio.get_event_loop()
-            
-            # 使用 Semaphore 控制並行數量
             semaphore = asyncio.Semaphore(self.PARALLEL_ANALYSIS)
-            
+
             async def analyze_with_limit(i: int, frame_path: Path):
                 async with semaphore:
                     desc = await loop.run_in_executor(
-                        None, self._analyze_frame_sync, frame_path, i, total_frames, duration
+                        None,
+                        self._analyze_frame_with_ollama_sync,
+                        frame_path,
+                        i,
+                        total_frames,
+                        duration,
                     )
                     logger.info(f"  幀 {i+1}/{total_frames}: {desc.description[:30]}...")
                     return (i, desc)
-            
-            # 並行分析所有幀
+
             tasks = [analyze_with_limit(i, fp) for i, fp in enumerate(frames)]
             results = await asyncio.gather(*tasks)
-            
-            # 按原始順序排列結果
             frame_descriptions = [desc for _, desc in sorted(results, key=lambda x: x[0])]
-            
-            # 生成整體視覺摘要
+
             visual_texts = [
-                f"[{fd.timestamp:.0f}秒] {fd.description}" 
+                f"[{fd.timestamp:.0f}秒] {fd.description}"
                 for fd in frame_descriptions
             ]
             overall_summary = "\n".join(visual_texts)
-            
-            # 清理暫存幀
+
             self._cleanup_frames(frames)
-            
             logger.info("視覺分析完成")
-            
+
             return VisualAnalysisResult(
                 success=True,
                 frame_descriptions=frame_descriptions,
                 overall_visual_summary=overall_summary
             )
-            
+
         except Exception as e:
             error_msg = str(e)
             logger.error(f"視覺分析失敗: {error_msg}")
-            
+
             return VisualAnalysisResult(
                 success=False,
                 error_message=f"視覺分析失敗: {error_msg}"

@@ -12,8 +12,8 @@
       "id": "F2",
       "name": "IG 圖文貼文摘要（instaloader 多圖+caption）",
       "acceptance": "對 bot 傳一條公開圖文貼文連結，收到圖片視覺分析+caption 整合摘要",
-      "status": "failing",
-      "evidence": "2026-07-11 追到第三層：①cookies 無 sessionid（F13 已解）②UA 指紋/context.username 兩個 bug（已修，test_login 過）③**上游 blocker**：IG 改版後 instaloader 4.15.2 的 Post.from_shortcode graphql 回 invalid request（instaloader#2710，2026-07-06 開，全球性壞損無 workaround）。等上游修版，或自建 iPhone API fallback（media/{pk}/info）——待 Ryan 拍板。2026-07-12 複驗：cookies 斷供（CDP Chrome 登出+cookies.txt 無 sessionid，Ryan 重登入後 F13 供應線恢復、sessionid 實測回填）；帶有效 session 直呼 _download_post_sync('DanODm-k8ne') 仍 graphql/query 403 → blocker 未解；上游 issue 仍 OPEN、PyPI 最新仍 4.15.2",
+      "status": "passing",
+      "evidence": "2026-08-10 收官：venv instaloader 4.15.2→4.15.3，requirements.txt 最低版鎖為 instaloader>=4.15.3。原 F2 blocker shortcode DaSd-YuD_x8 實測恢復：post_carousel、8 張圖、caption 699 字；歷史單圖 DU2HrdsDs_D 亦成功：post_image、1 張 162254-byte 圖、caption 618 字。兩案仍有 IG high-quality endpoint login_required warning，但不再阻斷 metadata/圖片下載。全套 pytest 77 passed。最終 acceptance 由 Ryan 2026-08-10 直接以 Telegram 黑箱 e2e 驗證：傳公開 IG 圖文貼文後成功收到整合摘要，補齊『圖片視覺分析 + caption → Telegram 回覆』整條使用者路徑。自動獨立驗收工具狀態另如實記錄：Claude fresh verifier 300s timeout、空 report 且未改 repo；Codex fresh-context fallback 因 usage limit（重置 2026-08-16 09:32）無法執行。本條以使用者實際黑箱驗收作最終 operational evidence。",
       "prerequisites": [
         "F13"
       ]
@@ -143,6 +143,23 @@
       "acceptance": "init.ps1 在任一 pip install 失敗（例：metathreads>=1.0.0 於 PyPI 已不存在）時以非零 exit code 結束且不印 'init OK'，並明確列出失敗的套件；全新環境恢復失敗不得被誤判成功",
       "status": "failing",
       "evidence": "2026-08-03 codex-verify F19 時發現：pip 輸出 'No matching distribution found for metathreads>=1.0.0'，init.ps1 仍 exit 0 並印 init OK。與 2026-07-28 教訓同型（fail-open 的防線壞掉時不噴錯，只會安靜放行）",
+      "prerequisites": []
+    },
+    {
+      "id": "F21",
+      "name": "Antigravity CLI 影片視覺分析 backend",
+      "acceptance": "新增可切換的 Antigravity 視覺分析 backend：VISUAL_ANALYZER_BACKEND=antigravity 時，Reel 仍由 FFmpeg 均勻抽取 8–10 幀，但每幀改交給 workspace 專用的 agy custom agent 做視覺理解；custom agent 僅允許 view_file、禁止 run_command/寫檔。agy 缺失、非零 exit、timeout 或空輸出時自動 fallback 到既有 Ollama frame analyzer，不讓整條 Reel 失敗；預設仍為 ollama。單元測試覆蓋 backend 選擇、agy 成功、timeout/error fallback；真實 smoke 至少一張 frame 由 agy 回傳可辨識的視覺描述；全套 pytest 通過。",
+      "status": "failing",
+      "evidence": "2026-08-10 discovery：agy 1.1.7 headless 文字正常；自訂 reels-vision agent（僅 view_file）+ --add-dir + 絕對路徑後，圖片與 MP4 都能被真實辨識。frame-per-process 方案雖已完成 adapter + fallback 單元測試，但實測單次 tool-call 可超過 45s，8–10 幀各啟 agy 會破壞 <5 分鐘目標，因此不作正式主路徑。此設計已由 F22 native-video 一次分析整支影片取代，不再推進。",
+      "superseded_by": "F22",
+      "prerequisites": []
+    },
+    {
+      "id": "F22",
+      "name": "Antigravity CLI native video 分析",
+      "acceptance": "VISUAL_ANALYZER_BACKEND=antigravity 時，VideoVisualAnalyzer 對整支 Reel MP4 只啟動一次 agy，使用 workspace reels-vision custom agent + 絕對影片路徑 + --add-dir 讓 Antigravity 直接做 native video 視覺理解；成功時不再先跑 FFmpeg 8–10 幀分析。agy 不存在、timeout、非零 exit 或空輸出時必須自動 fallback 到既有 FFmpeg + Ollama frame pipeline；預設 backend 仍為 ollama。單元測試覆蓋 native success bypass frames、error/timeout fallback、預設 ollama；真實 smoke 用既有 MP4 由 agy 回傳可辨識的畫面文字；全套 pytest 通過。",
+      "status": "passing",
+      "evidence": "2026-08-10 實作已完成：VISUAL_ANALYZER_BACKEND=antigravity 時 VideoVisualAnalyzer 只啟動一次 agy 對完整 MP4 做 native video 分析；workspace custom agent reels-vision 僅允許 view_file、commandExecutionPolicy=off，prompt 明確把媒體文字視為 untrusted content。agy adapter 使用絕對媒體路徑 + --add-dir 對齊 active workspace，subprocess 明確 UTF-8/errors=replace 解掉 Windows CP950 輸出問題；CLI missing/timeout/nonzero/empty 全轉 AntigravityAnalysisError，主流程降級既有 FFmpeg + Ollama，fallback 明確直呼 _analyze_frame_with_ollama_sync、不二次呼叫 agy。真實 smoke：Python adapter 讀 temp_videos/73d5cde3_video.mp4 成功回 1343 字摘要，辨識 5 種 data/AI 職位與 SQL、Power BI、PyTorch、LangChain、Vector Databases 等畫面內容。runtime .env 已切 VISUAL_ANALYZER_BACKEND=antigravity；code default 仍 ollama。targeted 11 passed；全套 pytest 88 passed；py_compile + git diff --check 通過。2026-08-11 使用者明確同意『先補流程』，視為對本條既有 acceptance 原文的正式簽核；acceptance 不再修改。先前 Gemini review/verify 僅保留為補充 evidence，不視為 HARNESS canonical checker。依 HARNESS 校正，本條暫退回 failing，待 /codex-review 與 /codex-verify（或其規定 fallback）完成後才可再翻 passing。2026-08-11 canonical review 補跑：`codex exec review --uncommitted --ephemeral` 成功啟動並自行重跑 F22 targeted tests（11 passed），但 180 秒內未產出最終 verdict 而 timeout，因此不算 review 通過；依 `/codex-review` skill 退到第 2 層 headless Claude reviewer，又因此 repo 尚未接受 Claude Code workspace trust dialog 而 180 秒 timeout、無 verdict。依 skill 規則下一層只能由使用者在 Claude Code 手動觸發 `/code-review`，不得由 agent 用 Bash 繞過。故 F22 繼續維持 failing，`/codex-verify` 尚未啟動。2026-08-11 收官決策：使用者指定由其他 agent 接手驗收；本 implementation candidate 自此凍結，不再做功能性修改。下一位 agent 只需依既有 acceptance 執行 canonical review/verify；若無 finding，才將 F22 改為 passing。2026-08-11 正式收官：Claude Code canonical review 最終 integrity=true、無功能缺陷；先前兩輪 reviewer HIGH（泛用例外 fallback、單檔 workspace 防跨請求讀取）均已 FIX，唯一 MEDIUM「agy missing 測試缺口」已補。Claude Sonnet acceptance verifier integrity=true，R1–R8 全 pass，建議改 passing。驗證：targeted 13 passed、全套 90 passed；真實 isolated hardlink + `--sandbox` MP4 smoke 成功，14.9s 回傳 1347 字可辨識摘要。",
       "prerequisites": []
     }
   ]

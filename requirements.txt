@@ -8,7 +8,7 @@ python-telegram-bot>=20.7
 # Instagram Download
 yt-dlp>=2024.12.6
 browser-cookie3>=0.19.1
-instaloader>=4.10
+instaloader>=4.15.3
 
 # Threads (Meta) Download
 metathreads>=1.0.0

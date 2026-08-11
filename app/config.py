@@ -24,6 +24,19 @@ class Settings(BaseSettings):
     ollama_model: str = Field(default="qwen3:8b", env="OLLAMA_MODEL")
     ollama_vision_model: str = Field(default="gemma3:4b", env="OLLAMA_VISION_MODEL")
 
+    # 影片視覺分析 backend（ollama / antigravity）
+    visual_analyzer_backend: str = Field(default="ollama", env="VISUAL_ANALYZER_BACKEND")
+    antigravity_cli_path: str = Field(default="agy", env="ANTIGRAVITY_CLI_PATH")
+    antigravity_vision_agent: str = Field(
+        default="reels-vision", env="ANTIGRAVITY_VISION_AGENT"
+    )
+    antigravity_vision_model: str = Field(
+        default="gemini-3.6-flash-high", env="ANTIGRAVITY_VISION_MODEL"
+    )
+    antigravity_vision_timeout_seconds: int = Field(
+        default=120, env="ANTIGRAVITY_VISION_TIMEOUT_SECONDS"
+    )
+
     # 摘要服務設定 (ollama, claude, copilot)
     summarizer_backend: str = Field(default="ollama", env="SUMMARIZER_BACKEND")
     claude_model: str = Field(default="sonnet", env="CLAUDE_MODEL")  # sonnet, opus, haiku
