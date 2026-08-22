@@ -6,6 +6,7 @@
       "name": "pydantic V2 遷移（消 deprecation warnings）",
       "acceptance": "pytest 無 PydanticDeprecatedSince20 警告；config.py 改用 json_schema_extra / ConfigDict",
       "status": "failing",
+      "signed_off": true,
       "evidence": null,
       "prerequisites": []
     },
