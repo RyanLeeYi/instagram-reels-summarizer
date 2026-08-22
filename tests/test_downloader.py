@@ -151,3 +151,80 @@ class TestUserAgentPropagation:
         d = InstagramDownloader()
         loader = d._get_instaloader()
         assert loader.context.username == "tester"
+
+
+class TestLoginFailureMessageMapping:
+    """F12(a)：instaloader 登入態失效時常見丟出 TypeError('NoneType' object is
+    not subscriptable)（解析未登入回應的空 JSON 所致），不是具名例外。要映射成
+    使用者看得懂、做得到的訊息，不能讓原始字串外洩。"""
+
+    def test_nonetype_not_subscriptable_maps_to_actionable_message(self, tmp_path, monkeypatch):
+        from app.services import downloader as dl_module
+
+        monkeypatch.chdir(tmp_path)
+        d = InstagramDownloader()
+
+        def boom(context, shortcode):
+            raise TypeError("'NoneType' object is not subscriptable")
+
+        monkeypatch.setattr(dl_module.instaloader.Post, "from_shortcode", staticmethod(boom))
+
+        result = d._download_post_sync("ABC123")
+
+        assert result.success is False
+        assert "NoneType" not in result.error_message
+        assert "not subscriptable" not in result.error_message
+        assert result.error_message == dl_module.LOGIN_REQUIRED_MESSAGE
+
+    def test_unrelated_error_keeps_original_message(self, tmp_path, monkeypatch):
+        """不是登入態訊號的錯誤不該被誤判、吞掉原始資訊。"""
+        from app.services import downloader as dl_module
+
+        monkeypatch.chdir(tmp_path)
+        d = InstagramDownloader()
+
+        def boom(context, shortcode):
+            raise RuntimeError("disk full while writing image")
+
+        monkeypatch.setattr(dl_module.instaloader.Post, "from_shortcode", staticmethod(boom))
+
+        result = d._download_post_sync("ABC123")
+
+        assert result.success is False
+        assert "disk full" in result.error_message
+
+    def test_yt_dlp_login_required_signal_maps_to_actionable_message(self, tmp_path, monkeypatch):
+        """Reel 路徑（_download_sync 的 yt-dlp 分支）也要映射同型的登入失效訊號。"""
+        import yt_dlp
+
+        from app.services import downloader as dl_module
+
+        monkeypatch.chdir(tmp_path)
+        (tmp_path / "cookies.txt").write_text("# manual", encoding="utf-8")
+        d = InstagramDownloader()
+
+        class FakeYDL:
+            def __init__(self, opts):
+                pass
+
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *a):
+                return False
+
+            def extract_info(self, url, download=True):
+                raise yt_dlp.utils.DownloadError(
+                    "ERROR: [Instagram] login_required: You need to log in"
+                )
+
+        monkeypatch.setattr(dl_module.yt_dlp, "YoutubeDL", FakeYDL)
+
+        result = d._download_sync(
+            "https://www.instagram.com/reel/ABC123xyz",
+            {"outtmpl": str(tmp_path / "x")},
+            None,
+        )
+
+        assert result.success is False
+        assert result.error_message == dl_module.LOGIN_REQUIRED_MESSAGE

@@ -16,10 +16,16 @@ logger = logging.getLogger(__name__)
 IG_URLS = ["https://www.instagram.com", "https://i.instagram.com"]
 NETSCAPE_HEADER = "# Netscape HTTP Cookie File\n# 由 ig_cookie_provider 自動產生，手動修改會被覆寫\n"
 
+# F15：這條路徑的降級預算 ≤10s——不自動拉起 Chrome，connect 也要有界，
+# 否則會沿用 playwright connect_over_cdp 的預設 180s 空等
+CDP_CONNECT_TIMEOUT_MS = 8000
+
 # 可注入的抓取函式型別：回傳 (cookies, user_agent)；cookies 為 None 代表 CDP 不可用。
 # UA 必須跟著 cookies 走：IG session 綁 client 指紋，用別的 UA 打會被判 cross-client 拒絕
 FetchResult = tuple[Optional[List[dict]], Optional[str]]
 FetchCookies = Callable[[], Awaitable[FetchResult]]
+# F12(b)：斷線告警管道，注入自 app.main 的 lifespan（走 Telegram bot.send_message）
+AlertCallback = Callable[[str], Awaitable[None]]
 
 
 class IGCookieProvider:
@@ -35,6 +41,13 @@ class IGCookieProvider:
         self.user_agent_file = cookies_file.parent / (cookies_file.name + ".ua")
         self.max_age_seconds = max_age_seconds
         self._fetch_cookies = fetch_cookies or self._fetch_from_cdp
+        self._alert_callback: Optional[AlertCallback] = None
+        # F12(c)：同一段斷線期間只告警一次；恢復登入後重新武裝
+        self._alert_sent = False
+
+    def set_alert_callback(self, callback: Optional[AlertCallback]) -> None:
+        """注入斷線告警管道（main.py lifespan 接 Telegram bot.send_message）。"""
+        self._alert_callback = callback
 
     @staticmethod
     def to_netscape(cookies: List[dict]) -> str:
@@ -67,6 +80,32 @@ class IGCookieProvider:
             return False
         return "sessionid" in content
 
+    def _file_has_session(self) -> bool:
+        """cookies.txt 是否還帶著 sessionid（不論新鮮與否）。
+        用來判斷「CDP 未登入」是不是真的斷線——只要舊檔還有效就不必吵人。"""
+        if not self.cookies_file.exists():
+            return False
+        try:
+            content = self.cookies_file.read_text(encoding="utf-8")
+        except OSError:
+            return False
+        return "sessionid" in content
+
+    async def _alert_disconnected(self) -> None:
+        """無 sessionid 斷線告警：同一段斷線期間只送一次，恢復登入後才重新武裝。"""
+        if self._alert_sent:
+            return
+        self._alert_sent = True
+        if self._alert_callback is None:
+            return
+        try:
+            await self._alert_callback(
+                "[IG 斷線告警] 登入態已斷線（CDP 未登入且 cookies.txt 無 session）——"
+                "請至 Chrome CDP 視窗重新登入 Instagram，或手動更新 cookies.txt"
+            )
+        except Exception as e:
+            logger.warning(f"IG 斷線告警發送失敗: {e}")
+
     def read_user_agent(self) -> Optional[str]:
         """取 cookies 誕生瀏覽器的 UA（sidecar 檔）；沒有回 None。"""
         try:
@@ -79,18 +118,25 @@ class IGCookieProvider:
         """從 CDP 抽 cookies 覆寫 cookies.txt；拿不到含 sessionid 的就保留原檔。"""
         cookies, user_agent = await self._fetch_cookies()
         if cookies is None:
-            logger.warning("⚠️ CDP Chrome 不可用，沿用既有 cookies.txt")
+            logger.warning(
+                "[IG cookies] Chrome CDP 未開啟或連線逾時，正在沿用既有 cookies.txt——"
+                "如需自動供應，請啟動 CDP Chrome（開啟 remote debugging）"
+            )
             return False
         if not any(c.get("name") == "sessionid" and c.get("value") for c in cookies):
             logger.warning(
-                "⚠️ CDP Chrome 的 profile 尚未登入 Instagram（無 sessionid）——"
+                "[IG cookies] CDP Chrome 的 profile 尚未登入 Instagram（無 sessionid）——"
                 "請在該 Chrome 視窗開 instagram.com 登入一次，之後即可自動供應"
             )
+            if not self._file_has_session():
+                # CDP 未登入且 cookies.txt 也無 session：真斷線，主動告警（F12）
+                await self._alert_disconnected()
             return False
         self.cookies_file.write_text(self.to_netscape(cookies), encoding="utf-8")
         if user_agent:
             self.user_agent_file.write_text(user_agent + "\n", encoding="utf-8")
-        logger.info(f"✅ 已從 CDP Chrome 刷新 IG cookies（{len(cookies)} 個）→ {self.cookies_file}")
+        self._alert_sent = False  # 恢復登入態，重新武裝下次斷線告警
+        logger.info(f"[IG cookies] 已從 CDP Chrome 刷新 IG cookies（{len(cookies)} 個）-> {self.cookies_file}")
         return True
 
     async def refresh_if_stale(self) -> bool:
@@ -100,14 +146,20 @@ class IGCookieProvider:
         return await self.refresh()
 
     async def _fetch_from_cdp(self) -> FetchResult:
-        """連 CDP Chrome 取 IG cookies + 瀏覽器 UA；Chrome 沒開就嘗試拉起（同 NotebookLM profile）。"""
+        """連「已在執行」的 CDP Chrome 取 IG cookies + 瀏覽器 UA。
+
+        F15：這條路徑的降級語意是「不可用就沿用舊 cookies.txt」——不自動拉起
+        Chrome（那是 NotebookLM 自己主動同步時才該做的事），connect 也要有界
+        timeout，否則會沿用 playwright 預設的 180s，讓下載前的刷新空等。
+        """
         try:
-            # 延遲 import 避免循環依賴；共用 NotebookLM 的 Chrome 啟動邏輯與 profile，
-            # _launch_browser 會自動拉起 Chrome 並設定 _context（現有 context 含登入態）
+            # 延遲 import 避免循環依賴；共用 NotebookLM 的 Chrome profile/連線邏輯
             from app.services.notebooklm_sync import NotebookLMSyncService
 
             svc = NotebookLMSyncService()
-            if not await svc._launch_browser():
+            if not await svc._launch_browser(
+                auto_start=False, connect_timeout_ms=CDP_CONNECT_TIMEOUT_MS
+            ):
                 return None, None
             try:
                 cookies = await svc._context.cookies(IG_URLS)

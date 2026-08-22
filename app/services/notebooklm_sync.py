@@ -181,16 +181,27 @@ class NotebookLMSyncService:
 
     # ==================== 瀏覽器連線 ====================
 
-    async def _launch_browser(self) -> bool:
-        """透過 CDP 連接到 Chrome，若未啟動則自動啟動"""
+    async def _launch_browser(
+        self, auto_start: bool = True, connect_timeout_ms: Optional[int] = None
+    ) -> bool:
+        """透過 CDP 連接到 Chrome。
+
+        Args:
+            auto_start: CDP 未執行時是否自動拉起 Chrome 並等待就緒（預設 True，
+                維持既有呼叫者行為）。F15：cookies 刷新這條路徑的降級語意是
+                「不可用就沿用舊檔」，不該自動拉起 Chrome，呼叫時傳 False。
+            connect_timeout_ms: 傳給 connect_over_cdp 的連線 timeout（毫秒）；
+                None 時不主動帶入，沿用 Playwright 預設（180000ms）。F15：
+                真正的 180s 空等就發生在這個呼叫，cookies 刷新路徑需要有界值。
+        """
         try:
-            from playwright.async_api import async_playwright
-
-            if self._playwright is None:
-                self._playwright = await async_playwright().start()
-
-            # 先檢查 CDP 是否已在執行
+            # 先檢查 CDP 是否已在執行——auto_start=False 時這裡就快速失敗，
+            # 完全不需要啟動 playwright driver（避免不必要的延遲與依賴）
             if not self._is_cdp_running():
+                if not auto_start:
+                    logger.warning("Chrome CDP 未執行，此呼叫不自動啟動")
+                    return False
+
                 logger.warning("Chrome CDP 未執行，嘗試自動啟動...")
                 started = self._start_chrome_cdp()
                 if not started:
@@ -206,8 +217,16 @@ class NotebookLMSyncService:
                 if not ready:
                     return False
 
+            from playwright.async_api import async_playwright
+
+            if self._playwright is None:
+                self._playwright = await async_playwright().start()
+
+            connect_kwargs = (
+                {"timeout": connect_timeout_ms} if connect_timeout_ms is not None else {}
+            )
             self._browser = await self._playwright.chromium.connect_over_cdp(
-                self.cdp_url
+                self.cdp_url, **connect_kwargs
             )
 
             # 使用 Chrome 現有的 context（已有登入狀態）

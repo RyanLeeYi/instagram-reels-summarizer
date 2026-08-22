@@ -17,6 +17,23 @@ from app.services.ig_cookie_provider import provider as ig_cookie_provider
 
 logger = logging.getLogger(__name__)
 
+# F12(a)：使用者看得懂、做得到的登入態失效訊息
+LOGIN_REQUIRED_MESSAGE = "IG 需要登入，請更新 cookies.txt"
+
+
+def _is_login_failure_signal(error_msg: str) -> bool:
+    """判斷錯誤字串是不是「IG 登入態失效」的已知訊號。
+
+    instaloader 登入態失效時常常不是丟具名例外，而是在解析未登入回應的空 JSON
+    時炸出 'NoneType' object is not subscriptable；yt-dlp 則常見 login_required
+    / rate-limit 字樣。"""
+    lowered = error_msg.lower()
+    return (
+        ("nonetype" in lowered and "not subscriptable" in lowered)
+        or "login_required" in lowered
+        or "rate-limit" in lowered
+    )
+
 
 @dataclass
 class DownloadResult:
@@ -456,6 +473,11 @@ class InstagramDownloader:
                     success=False,
                     error_message="此影片已不存在或無法存取",
                 )
+            elif _is_login_failure_signal(error_msg):
+                return DownloadResult(
+                    success=False,
+                    error_message=LOGIN_REQUIRED_MESSAGE,
+                )
             else:
                 return DownloadResult(
                     success=False,
@@ -463,9 +485,15 @@ class InstagramDownloader:
                 )
 
         except Exception as e:
+            error_msg = str(e)
+            if _is_login_failure_signal(error_msg):
+                return DownloadResult(
+                    success=False,
+                    error_message=LOGIN_REQUIRED_MESSAGE,
+                )
             return DownloadResult(
                 success=False,
-                error_message=f"下載時發生錯誤: {str(e)}",
+                error_message=f"下載時發生錯誤: {error_msg}",
             )
 
     def _get_post_caption(self, url: str) -> Optional[str]:
@@ -649,10 +677,15 @@ class InstagramDownloader:
             )
         except Exception as e:
             error_msg = str(e)
-            logger.error(f"下載貼文失敗: {error_msg}")
+            mapped_msg = (
+                LOGIN_REQUIRED_MESSAGE
+                if _is_login_failure_signal(error_msg)
+                else f"下載失敗: {error_msg}"
+            )
+            logger.error(f"下載貼文失敗: {mapped_msg}")
             return PostDownloadResult(
                 success=False,
-                error_message=f"下載失敗: {error_msg}",
+                error_message=mapped_msg,
             )
 
     async def cleanup_post_images(self, image_paths: List[Path]) -> None:
