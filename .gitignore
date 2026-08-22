@@ -76,6 +76,8 @@ app/prompts/examples/
 docs/*
 !docs/ARCHITECTURE.md
 !docs/prd/
+# 歸檔的 feature 原文是 harness 紀錄本體（收官流程與中台 scanner 都讀它），不是本地暫存
+!docs/archive/
 
 # Logs
 *.log
