@@ -12,6 +12,7 @@ from app.database.models import init_db
 from app.bot.telegram_handler import TelegramBotHandler
 from app.scheduler.retry_job import retry_scheduler
 from app.services.chrome_lifecycle import close_owned_chrome, reclaim_orphan_chrome
+from app.services.ig_cookie_provider import provider as ig_cookie_provider
 
 
 # 設定日誌
@@ -60,6 +61,18 @@ async def lifespan(app: FastAPI):
     # 設定排程器的 Bot 與主 pipeline 入口（F16：重試走同一條流程，不再自己維護簡化版）
     retry_scheduler.set_bot(telegram_app.bot)
     retry_scheduler.set_handler(bot_handler)
+
+    # F12(b)：IG cookie provider 斷線告警管道——走同一個 Telegram bot，
+    # 送給 allowed_chat_ids 全員（provider 是 import 期建立的模組級單例，拿不到 bot，
+    # 用同 retry_scheduler 的注入 pattern 補上）
+    async def _alert_ig_disconnected(message: str) -> None:
+        for chat_id in settings.allowed_chat_ids:
+            try:
+                await telegram_app.bot.send_message(chat_id=chat_id, text=message)
+            except Exception as e:
+                logger.warning(f"IG 斷線告警發送失敗（chat_id={chat_id}）: {e}")
+
+    ig_cookie_provider.set_alert_callback(_alert_ig_disconnected)
 
     # 啟動排程器（如果啟用）
     if settings.retry_enabled:
