@@ -34,7 +34,7 @@
   - ⚠️ **retry_mode 的三個約束**（都是 codex review 抓出來的，改動時別破壞）：①重試時不得再寫 failed_task（否則每小時長一筆 pending）②重試時 Roam 同步失敗要回 `fail(SYNC)`，不能回 ok（否則任務被標 success 就再也不同步）③`save_processed_url` 已改 **upsert**——委派後同一 URL 會重跑，舊的純 insert 會撞 unique 然後被誤報成下載失敗
   - `THREADS_ENABLED=false` 時 threads URL 現在明確拒收，不再掉進 IG 貼文下載器
 
-- **F19 passing**：CDP Chrome 生命週期收斂（停止時關掉自己啟動的、啟動時收養上一輪殘留）。PRD `docs/prd/chrome-cdp-lifecycle.md`（Ryan 當場簽核 acceptance）；新模組 `app/services/chrome_lifecycle.py`；`notebooklm_sync._start_chrome_cdp` 成功後 `mark_owned(pid)`；`main.lifespan` startup 收養、shutdown 關閉。TDD 19 tests，全套 **65 passed**（原 46）
+- **F19 passing**：CDP Chrome 生命週期收斂（停止時關掉自己啟動的、啟動時收養上一輪殘留）。PRD `docs/archive/chrome-cdp-lifecycle.md`（Ryan 當場簽核 acceptance）；新模組 `app/services/chrome_lifecycle.py`；`notebooklm_sync._start_chrome_cdp` 成功後 `mark_owned(pid)`；`main.lifespan` startup 收養、shutdown 關閉。TDD 19 tests，全套 **65 passed**（原 46）
   - **擁有權規則**：`_is_cdp_running()` 已為 true → 不擁有（使用者自己開的，絕不關）；自己啟動成功 → 擁有。狀態放**模組層級**＋持久化到 `~/.chrome-cdp-notebooklm/.owned-by-reels.json`（cookies 刷新每次 new 一個 service 實例，放 instance 會歸零；服務被強制 kill 時 lifespan 不跑，殘留只能靠下次啟動回收）
   - **收養而非殺掉重開**：殘留的 Chrome 已登入且 session 是熱的，殺掉只是 15 秒後再開一個
   - **收尾預算是關鍵**：原始實作耗時 **20.12 秒**（每個 CDP HTTP 呼叫 2s 逾時 × 多 target ＋輪詢）> 中台 grace 10 秒 → 行程在清狀態檔前被強殺。改總預算制（HTTP 逾時 1s、graceful 60%／輪詢 40%、強殺也綁預算），修後 6.06s
@@ -43,7 +43,7 @@
 
 ## 之前的 session 做了（2026-07-23 第八場）
 
-- **F18 設計定案、未實作**：`docs/prd/summarizer-fallback-chain.md`（commit efc7310）。需求源自 Ryan「Copilot 沒流量時自動切 Codex/Claude」
+- **F18 設計定案、未實作**：`docs/archive/summarizer-fallback-chain.md`（commit efc7310）。需求源自 Ryan「Copilot 沒流量時自動切 Codex/Claude」
   - ⚠️ **F18 尚未寫進 feature_list.json**——照 harness 規矩 acceptance 要 Ryan 簽核才凍結。spec 最後一段就是待簽核的 acceptance
   - **關鍵查證結論**：Copilot 剩餘額度 % 沒有非互動取得管道（CLI 只在互動 UI 顯示；`gh api user/copilot/usage` → 404）。原需求「剩 <5% 就切」不可行 → 改**反應式 fallback**（執行失敗當下換手）。詳見 vault DECISIONS D6
   - **設計摘要**：新增 `CodexCLISummarizer`（`codex exec -o <file> --skip-git-repo-check -s read-only`）+ `FallbackSummarizer` 包裝器（無狀態、每請求從鏈頭重試）+ factory 組鏈（`SUMMARIZER_FALLBACK_ENABLED` / `SUMMARIZER_FALLBACK_CHAIN`）。鏈＝Copilot→Codex→Claude→Ollama，一般化不特判 copilot
@@ -79,7 +79,7 @@
 ## 下一步（具體到可直接動手）
 
 -1. **未觀察**：F16 尚未經歷一次真實的每小時排程重試（目前 14 筆 pending 多數卡 instaloader#2710）。下次排程觸發時看 log 確認委派路徑實跑。另 **Copilot CLI 目前在本機找不到**（log：`Copilot CLI 未找到 → fallback 到 Ollama`），F18 的動機正在發生
-0. **F18 續行**：請 Ryan 簽核 `docs/prd/summarizer-fallback-chain.md` 末段 acceptance → 寫進 feature_list.json 標 failing → TDD 實作（先 FallbackSummarizer 的鏈行為測試，再 CodexCLISummarizer，最後 factory 組鏈；mock subprocess 不燒真 Codex 額度）。Ryan 曾問「要不要順便保護 F14 連結 pass」，已答不建議（走 claude 非 copilot、失敗已優雅降級），要做就開 F19 分開
+0. **F18 續行**：請 Ryan 簽核 `docs/archive/summarizer-fallback-chain.md` 末段 acceptance → 寫進 feature_list.json 標 failing → TDD 實作（先 FallbackSummarizer 的鏈行為測試，再 CodexCLISummarizer，最後 factory 組鏈；mock subprocess 不燒真 Codex 額度）。Ryan 曾問「要不要順便保護 F14 連結 pass」，已答不建議（走 claude 非 copilot、失敗已優雅降級），要做就開 F19 分開
 1. 其餘 failing：**F11**（pydantic V2 遷移）、**F12**（下載失敗錯誤訊息可行動化，TDD）、**F15**（CDP 不可用時快速降級，TDD）、**F16**（retry 路徑對齊主 pipeline）、F2（卡上游）。M3 的 F1–F8 重驗除 F2 外全綠
 2. 首次排程觸發約 2026-07-12 00:32——看 log「開始執行失敗任務重試」確認真實定時觸發（可補進 F8 evidence 補齊 R4）；預期一波 Telegram 通知
 3. retry 路徑與主 pipeline 漂移：_retry_full_process 只同步 Roam，沒接 vault_sync、沒做視覺分析、/p/ 貼文也走 reel 下載路徑——retry 已常開，值得盡快加 feature 對齊

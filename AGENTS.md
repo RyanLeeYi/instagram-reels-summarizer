@@ -25,7 +25,9 @@ Telegram bot：收 IG Reels / 圖文貼文 / Threads 連結 → 下載、轉錄�
 
 ## 工作規則
 
-1. 一次只做一個 feature（feature_list.json 第一個 failing）
+1. 一次只推進一個 envelope（沒有 envelope 就是一條 feature，看 `feature_list.json` 挑第一個 failing）。
+   同 envelope 內的 slice 可同批實作，序列或平行皆可；平行需 `touches` 無交集且各自 worktree。
+   **驗收一律逐條、依 `prerequisites` 順序、各自 evidence**——上游改動會讓已通過的下游驗收失效
 2. status 只能 failing → passing 且必附 evidence
 3. list 之外的新事項先加進 list 標 failing，不直接做
 4. session 結束前更新 session-handoff.md
