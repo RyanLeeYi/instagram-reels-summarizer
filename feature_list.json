@@ -74,6 +74,20 @@
       "touches": [
         "app/services/antigravity_visual_analyzer.py"
       ]
+    },
+    {
+      "id": "F23",
+      "name": "requirements.txt 的 metathreads>=1.0.0 在 PyPI 不存在",
+      "acceptance": "待簽核草案：`.\\init.ps1` 在全新環境跑到底並 exit 0（即 requirements.txt 每一條都裝得起來）。現況 metathreads 在 PyPI 最高只有 0.0.4，`metathreads>=1.0.0` 永遠無解，F20 修好 exit code 之後每次環境恢復都會硬失敗。三個方向擇一（需 Ryan 裁決）：(a) 降版釘 metathreads==0.0.4（本機 venv 現況就是這版，Threads 下載功能實測可用）；(b) 移除此依賴並確認 THREADS_ENABLED=false 路徑不 import 它；(c) vendor 或改用別的 Threads 客戶端。",
+      "status": "failing",
+      "signed_off": false,
+      "evidence": "2026-08-23 實測：`pip index versions metathreads` 回 Available versions: 0.0.4, 0.0.3, 0.0.2, 0.0.1；本機 venv 裝的是 0.0.4。F20 的 init.ps1 修好後，全新環境恢復會在此條停下並 exit 1。",
+      "prerequisites": [
+        "F20"
+      ],
+      "touches": [
+        "requirements.txt"
+      ]
     }
   ]
 }

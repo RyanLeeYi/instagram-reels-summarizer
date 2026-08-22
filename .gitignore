@@ -117,3 +117,6 @@ models/
 ~/.cache/huggingface/
 cookies.txt.ua
 .harness/
+
+# Claude Code subagent worktrees
+.claude/worktrees/
