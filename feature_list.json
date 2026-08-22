@@ -8,7 +8,11 @@
       "status": "failing",
       "signed_off": true,
       "evidence": null,
-      "prerequisites": []
+      "prerequisites": [],
+      "touches": [
+        "app/config.py",
+        "tests/test_config_pydantic_v2.py"
+      ]
     },
     {
       "id": "F12",
@@ -19,6 +23,14 @@
       "evidence": null,
       "prerequisites": [
         "F13"
+      ],
+      "touches": [
+        "app/services/downloader.py",
+        "app/services/ig_cookie_provider.py",
+        "app/bot/telegram_handler.py",
+        "app/main.py",
+        "tests/test_downloader.py",
+        "tests/test_ig_cookie_provider.py"
       ]
     },
     {
@@ -30,6 +42,11 @@
       "evidence": "2026-07-11 F8 沙盒實測發現：CDP Chrome 未開時每次下載前空等 BrowserType.connect_over_cdp 180s timeout 才降級（服務常態下 Chrome 開著無感，未開時 bot 體感極慢）",
       "prerequisites": [
         "F13"
+      ],
+      "touches": [
+        "app/services/ig_cookie_provider.py",
+        "app/services/notebooklm_sync.py",
+        "tests/test_ig_cookie_provider.py"
       ]
     },
     {
@@ -39,7 +56,11 @@
       "status": "failing",
       "signed_off": true,
       "evidence": "2026-08-03 codex-verify F19 時發現：pip 輸出 'No matching distribution found for metathreads>=1.0.0'，init.ps1 仍 exit 0 並印 init OK。與 2026-07-28 教訓同型（fail-open 的防線壞掉時不噴錯，只會安靜放行）",
-      "prerequisites": []
+      "prerequisites": [],
+      "touches": [
+        "init.ps1",
+        "tests/test_init_script.py"
+      ]
     },
     {
       "id": "F21",
@@ -49,7 +70,10 @@
       "signed_off": true,
       "evidence": "2026-08-10 discovery：agy 1.1.7 headless 文字正常；自訂 reels-vision agent（僅 view_file）+ --add-dir + 絕對路徑後，圖片與 MP4 都能被真實辨識。frame-per-process 方案雖已完成 adapter + fallback 單元測試，但實測單次 tool-call 可超過 45s，8–10 幀各啟 agy 會破壞 <5 分鐘目標，因此不作正式主路徑。此設計已由 F22 native-video 一次分析整支影片取代，不再推進。",
       "superseded_by": "F22",
-      "prerequisites": []
+      "prerequisites": [],
+      "touches": [
+        "app/services/antigravity_visual_analyzer.py"
+      ]
     }
   ]
 }
