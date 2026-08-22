@@ -1,94 +1,82 @@
 """應用程式設定模組"""
 
-import os
 from pathlib import Path
 from typing import List
 
-from pydantic_settings import BaseSettings
 from pydantic import Field
+from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
 class Settings(BaseSettings):
     """應用程式設定"""
 
+    model_config = SettingsConfigDict(env_file=".env", env_file_encoding="utf-8")
+
     # Telegram
-    telegram_bot_token: str = Field(..., env="TELEGRAM_BOT_TOKEN")
-    telegram_allowed_chat_ids: str = Field(default="", env="TELEGRAM_ALLOWED_CHAT_IDS")
+    telegram_bot_token: str
+    telegram_allowed_chat_ids: str = Field(default="")
 
     # Whisper 本地模型設定
-    whisper_model_size: str = Field(default="base", env="WHISPER_MODEL_SIZE")
-    whisper_device: str = Field(default="cpu", env="WHISPER_DEVICE")
+    whisper_model_size: str = Field(default="base")
+    whisper_device: str = Field(default="cpu")
 
     # Ollama 本地 LLM 設定
-    ollama_host: str = Field(default="http://localhost:11434", env="OLLAMA_HOST")
-    ollama_model: str = Field(default="qwen3:8b", env="OLLAMA_MODEL")
-    ollama_vision_model: str = Field(default="gemma3:4b", env="OLLAMA_VISION_MODEL")
+    ollama_host: str = Field(default="http://localhost:11434")
+    ollama_model: str = Field(default="qwen3:8b")
+    ollama_vision_model: str = Field(default="gemma3:4b")
 
     # 影片視覺分析 backend（ollama / antigravity）
-    visual_analyzer_backend: str = Field(default="ollama", env="VISUAL_ANALYZER_BACKEND")
-    antigravity_cli_path: str = Field(default="agy", env="ANTIGRAVITY_CLI_PATH")
-    antigravity_vision_agent: str = Field(
-        default="reels-vision", env="ANTIGRAVITY_VISION_AGENT"
-    )
-    antigravity_vision_model: str = Field(
-        default="gemini-3.6-flash-high", env="ANTIGRAVITY_VISION_MODEL"
-    )
-    antigravity_vision_timeout_seconds: int = Field(
-        default=120, env="ANTIGRAVITY_VISION_TIMEOUT_SECONDS"
-    )
+    visual_analyzer_backend: str = Field(default="ollama")
+    antigravity_cli_path: str = Field(default="agy")
+    antigravity_vision_agent: str = Field(default="reels-vision")
+    antigravity_vision_model: str = Field(default="gemini-3.6-flash-high")
+    antigravity_vision_timeout_seconds: int = Field(default=120)
 
     # 摘要服務設定 (ollama, claude, copilot)
-    summarizer_backend: str = Field(default="ollama", env="SUMMARIZER_BACKEND")
-    claude_model: str = Field(default="sonnet", env="CLAUDE_MODEL")  # sonnet, opus, haiku
-    copilot_model: str = Field(default="claude-sonnet-4.5", env="COPILOT_MODEL")  # claude-sonnet-4.5, gpt-5, etc.
+    summarizer_backend: str = Field(default="ollama")
+    claude_model: str = Field(default="sonnet")  # sonnet, opus, haiku
+    copilot_model: str = Field(default="claude-sonnet-4.5")  # claude-sonnet-4.5, gpt-5, etc.
 
     # Roam Research
-    roam_graph_name: str = Field(..., env="ROAM_GRAPH_NAME")
+    roam_graph_name: str
 
     # Webhook 設定
-    webhook_url: str = Field(default="", env="WEBHOOK_URL")
+    webhook_url: str = Field(default="")
 
     # Claude Code 同步設定
-    claude_code_sync_enabled: bool = Field(default=False, env="CLAUDE_CODE_SYNC_ENABLED")
+    claude_code_sync_enabled: bool = Field(default=False)
 
     # 系統設定
-    retry_enabled: bool = Field(default=True, env="RETRY_ENABLED")
-    retry_interval_hours: int = Field(default=1, env="RETRY_INTERVAL_HOURS")
-    max_retry_count: int = Field(default=3, env="MAX_RETRY_COUNT")
-    temp_video_dir: str = Field(default="./temp_videos", env="TEMP_VIDEO_DIR")
-    database_url: str = Field(
-        default="sqlite+aiosqlite:///./app.db", env="DATABASE_URL"
-    )
+    retry_enabled: bool = Field(default=True)
+    retry_interval_hours: int = Field(default=1)
+    max_retry_count: int = Field(default=3)
+    temp_video_dir: str = Field(default="./temp_videos")
+    database_url: str = Field(default="sqlite+aiosqlite:///./app.db")
 
     # Prompt 模板設定
-    prompts_path: str = Field(default="./app/prompts", env="PROMPTS_PATH")
+    prompts_path: str = Field(default="./app/prompts")
 
     # Instaloader Session 設定
-    instaloader_session_path: str = Field(
-        default="./temp_videos", env="INSTALOADER_SESSION_PATH"
-    )
+    instaloader_session_path: str = Field(default="./temp_videos")
 
     # Threads 設定
-    threads_username: str = Field(default="", env="THREADS_USERNAME")
-    threads_password: str = Field(default="", env="THREADS_PASSWORD")
-    threads_enabled: bool = Field(default=True, env="THREADS_ENABLED")
-    threads_fetch_replies: bool = Field(default=True, env="THREADS_FETCH_REPLIES")
-    threads_max_replies: int = Field(default=50, env="THREADS_MAX_REPLIES")
+    threads_username: str = Field(default="")
+    threads_password: str = Field(default="")
+    threads_enabled: bool = Field(default=True)
+    threads_fetch_replies: bool = Field(default=True)
+    threads_max_replies: int = Field(default=50)
 
     # 知識庫（Obsidian vault）整併設定 — 取代 NotebookLM（docs/prd/vault-sync.md）
-    vault_sync_enabled: bool = Field(default=True, env="VAULT_SYNC_ENABLED")
-    vault_path: str = Field(
-        default=r"C:\Users\user\OneDrive\Desktop\Obsidian", env="VAULT_PATH"
-    )
-    vault_link_enrich: bool = Field(default=True, env="VAULT_LINK_ENRICH")
+    vault_sync_enabled: bool = Field(default=True)
+    vault_path: str = Field(default=r"C:\Users\user\OneDrive\Desktop\Obsidian")
+    vault_link_enrich: bool = Field(default=True)
 
     # NotebookLM 設定 (Chrome CDP 連線)——已被 vault sync 取代，保留程式碼備用
-    notebooklm_enabled: bool = Field(default=False, env="NOTEBOOKLM_ENABLED")
-    notebooklm_cdp_url: str = Field(default="http://localhost:9222", env="NOTEBOOKLM_CDP_URL")
-    notebooklm_upload_video: bool = Field(default=True, env="NOTEBOOKLM_UPLOAD_VIDEO")
+    notebooklm_enabled: bool = Field(default=False)
+    notebooklm_cdp_url: str = Field(default="http://localhost:9222")
+    notebooklm_upload_video: bool = Field(default=True)
     notebooklm_chrome_profile: str = Field(
         default="",
-        env="NOTEBOOKLM_CHROME_PROFILE",
         description="Chrome CDP 專用 user-data-dir，空字串時使用 ~/.chrome-cdp-notebooklm",
     )
 
@@ -116,10 +104,6 @@ class Settings(BaseSettings):
         path = Path(self.instaloader_session_path)
         path.mkdir(parents=True, exist_ok=True)
         return path
-
-    class Config:
-        env_file = ".env"
-        env_file_encoding = "utf-8"
 
 
 # 建立全域設定實例
