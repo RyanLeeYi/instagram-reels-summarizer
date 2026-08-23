@@ -1,6 +1,33 @@
 # Session Handoff
 
-> 最後更新：2026-08-11（F22 canonical review/verify 完成，正式 passing）
+> 最後更新：2026-08-23（F12／F15／F23 passing 並歸檔；新增 F24／F25 待簽核）
+
+## 收官狀態（2026-08-23，agent-brief 無人看管 session）
+
+- **F12 passing**（2 輪獨立驗收）、**F15 passing**（1 輪即過）、**F23 passing**（1 輪即過）。三條原文已搬進 `docs/archive/features.jsonl`，主檔只剩 failing。
+- 全套 pytest **115 passed**；`.\init.ps1` 實跑 **exit 0**。已 commit + push（`79398fd`），`origin/main` 與 HEAD 同步。
+- **主檔剩餘 failing：F21（已裁決，維持歷史紀錄）、F24、F25（兩條都待 Ryan 簽核）。**
+
+### F23 的關鍵結論：metathreads 不是版本問題，是根本無解
+
+`metathreads` **任何版本都裝不起來**——PyPI 最高 0.0.4，而 0.0.4 硬釘 `httpx==0.24.1`，與本專案 `httpx>=0.25.0`（python-telegram-bot 需要）直接衝突，pip 回 `ResolutionImpossible`。所以原草案的方向 (a)「降版釘 0.0.4」**在技術上不可行**，不是取捨問題。已採方向 (b) 移除。
+
+連帶要知道的坑：`threads_enabled` 預設是 **true**，而 `_get_api()` 缺套件時丟 `RuntimeError`，`_download_sync` 原本直接把它變成硬失敗，**跳過了本來就不需要該套件的 Googlebot SSR / Web Scraping 兩條 fallback**。已改成降級走 fallback——**不要把這段改回去**，否則全新環境的 Threads 連結會靜默失敗。
+
+### F12 修正時踩到的兩件事（改這塊前先讀）
+
+1. **acceptance 寫「Telegram 回覆與 log」是並列要求**。原實作只有貼文路徑記 log，Reel 路徑（本專案主流程）完全靜默，維運者看 log tail 看不到登入態失效。現在兩個 login-failure 分支都走 `_login_required_result()` 統一出口，log 與回覆用同一則訊息——**新增分支時記得走這個出口**，不要再各自 return。
+2. **「只告警一次」的配額只有在訊息真的送出去之後才算用掉**。原實作在檢查 callback 是否存在**之前**就設 `_alert_sent = True`，管道還沒接上時偵測到斷線就會永久燒掉配額。已改成 `await callback(...)` 成功回來才消耗。
+
+### 新增兩條待簽核
+
+- **F24（P3）**：`app/main.py:68-73` 的 `_alert_ig_disconnected` 對每個 `chat_id` 各自 try/except 且**從不重新拋出**，所以上面第 2 點的修正在「所有 chat_id 都送失敗」時仍會被誤判成已送達、不再重試。等於一次都沒人收到卻不會補送——就是 2026-07-12 事故的另一種形狀。
+- **F25（P4）**：`init.ps1` 的煙霧測試失敗時仍無條件印 `init OK`（F20 只修了 pip install 階段）。
+
+### F21 已裁決，但會一直出現在 dispatch 清單
+
+Ryan 2026-08-23 回覆「直接把影片給 any CLI 看，不需要逐幀分析」＝否決 frame-per-process、確認 F22（整支影片一次分析，已 passing）就是採用方案。已維持 `failing` + `superseded_by: F22` 當歷史紀錄。**但它 `signed_off: true` 且 `failing`，所以每次 dispatch 都還是會被列成「待做」**——要讓它消失需要 harness 新增終態值，那需要 Ryan 認可，本 session 沒動。
+
 
 ## 收官狀態（2026-08-11）
 
