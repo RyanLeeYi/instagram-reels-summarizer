@@ -11,7 +11,9 @@ browser-cookie3>=0.19.1
 instaloader>=4.15.3
 
 # Threads (Meta) Download
-metathreads>=1.0.0
+# F23：metathreads 已移除——PyPI 最高只有 0.0.4，且它釘死 httpx==0.24.1，
+# 與本專案的 httpx>=0.25.0 / python-telegram-bot 直接衝突（pip ResolutionImpossible）。
+# Threads 下載改走既有的 Googlebot SSR / Web Scraping fallback，不需要這個套件。
 
 # Local Whisper (faster-whisper)
 faster-whisper>=1.0.0

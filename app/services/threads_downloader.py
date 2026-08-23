@@ -900,10 +900,29 @@ class ThreadsDownloader:
             )
 
         except RuntimeError as e:
-            # MetaThreads 未安裝
+            # F23：metathreads 已從 requirements.txt 移除（PyPI 最高 0.0.4 且釘死
+            # httpx==0.24.1，與本專案 httpx>=0.25.0 衝突）。缺 API 不是致命錯——
+            # 底下兩條 fallback 本來就不經過 MetaThreads，直接走它們。
+            logger.warning(f"MetaThreads API 不可用（{e}），改走 Googlebot SSR / Web Scraping")
+
+            ssr_result = self._download_via_googlebot_ssr(url)
+            if ssr_result and ssr_result.success:
+                return ssr_result
+
+            scraped_post = self._download_via_web_scraping(url)
+            if scraped_post:
+                return ThreadsDownloadResult(
+                    success=True,
+                    content_type="single_post",
+                    post=scraped_post,
+                )
+
             return ThreadsDownloadResult(
                 success=False,
-                error_message=str(e),
+                error_message=(
+                    "無法取得 Threads 內容："
+                    "MetaThreads API 不可用，Googlebot SSR 與 Web Scraping 也失敗"
+                ),
             )
         except Exception as e:
             error_msg = str(e)

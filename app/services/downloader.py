@@ -49,6 +49,16 @@ class DownloadResult:
     audio_size_bytes: Optional[int] = None  # 音訊檔案大小（位元組）
 
 
+def _login_required_result() -> "DownloadResult":
+    """登入態失效的統一出口（F12）。
+
+    acceptance 要求「Telegram 回覆與 log」兩邊都看得到可行動訊息——維運者看 log
+    tail 就該發現登入態斷了，不能只有傳連結的人看得到。走這個出口就不會再漏掉一邊。
+    """
+    logger.error(LOGIN_REQUIRED_MESSAGE)
+    return DownloadResult(success=False, error_message=LOGIN_REQUIRED_MESSAGE)
+
+
 @dataclass
 class PostDownloadResult:
     """貼文下載結果"""
@@ -474,10 +484,7 @@ class InstagramDownloader:
                     error_message="此影片已不存在或無法存取",
                 )
             elif _is_login_failure_signal(error_msg):
-                return DownloadResult(
-                    success=False,
-                    error_message=LOGIN_REQUIRED_MESSAGE,
-                )
+                return _login_required_result()
             else:
                 return DownloadResult(
                     success=False,
@@ -487,10 +494,7 @@ class InstagramDownloader:
         except Exception as e:
             error_msg = str(e)
             if _is_login_failure_signal(error_msg):
-                return DownloadResult(
-                    success=False,
-                    error_message=LOGIN_REQUIRED_MESSAGE,
-                )
+                return _login_required_result()
             return DownloadResult(
                 success=False,
                 error_message=f"下載時發生錯誤: {error_msg}",

@@ -228,6 +228,59 @@ class TestDisconnectAlert:
         assert len(alerts) == 1
 
     @pytest.mark.asyncio
+    async def test_alert_quota_not_burned_before_callback_is_wired(self, tmp_path):
+        """管道還沒接上就偵測到斷線，不能把「只告警一次」的配額用掉。
+
+        否則 callback 補上之後這段斷線再也不會告警——就是 2026-07-12 斷線 5 天
+        沒人發現的翻版。"""
+        target = tmp_path / "cookies.txt"
+        target.write_text("NO SESSION HERE", encoding="utf-8")
+
+        async def fake_fetch():
+            return [_pw_cookie("mid", "anon-only")], None
+
+        p = IGCookieProvider(cookies_file=target, fetch_cookies=fake_fetch)
+
+        # callback 尚未注入時就先斷線一次
+        assert await p.refresh() is False
+
+        alerts = []
+
+        async def fake_alert(message):
+            alerts.append(message)
+
+        p.set_alert_callback(fake_alert)
+
+        # 同一段斷線持續中，管道接上後仍要送出一次
+        assert await p.refresh() is False
+        assert len(alerts) == 1
+
+    @pytest.mark.asyncio
+    async def test_alert_quota_not_burned_when_send_fails(self, tmp_path):
+        """送失敗＝沒人收到，配額不該算用掉，下次刷新要再試。"""
+        target = tmp_path / "cookies.txt"
+        target.write_text("NO SESSION HERE", encoding="utf-8")
+
+        async def fake_fetch():
+            return [_pw_cookie("mid", "anon-only")], None
+
+        attempts = []
+
+        async def flaky_alert(message):
+            attempts.append(message)
+            if len(attempts) == 1:
+                raise RuntimeError("telegram unreachable")
+
+        p = IGCookieProvider(cookies_file=target, fetch_cookies=fake_fetch)
+        p.set_alert_callback(flaky_alert)
+
+        assert await p.refresh() is False   # 第一次送失敗
+        assert await p.refresh() is False   # 重試，這次成功
+        assert await p.refresh() is False   # 已送達，去重生效
+
+        assert len(attempts) == 2
+
+    @pytest.mark.asyncio
     async def test_no_alert_when_cookies_file_still_has_valid_session(self, tmp_path):
         """只有 CDP 沒登入，但 cookies.txt 還留著有效 session 時不該吵人。"""
         target = tmp_path / "cookies.txt"

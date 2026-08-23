@@ -92,11 +92,16 @@ class IGCookieProvider:
         return "sessionid" in content
 
     async def _alert_disconnected(self) -> None:
-        """無 sessionid 斷線告警：同一段斷線期間只送一次，恢復登入後才重新武裝。"""
+        """無 sessionid 斷線告警：同一段斷線期間只送一次，恢復登入後才重新武裝。
+
+        「只送一次」的配額只有在**訊息真的送出去**之後才算用掉。管道還沒接上
+        （callback 未注入）或送失敗時就標記已送，會讓這段斷線再也不告警——那正是
+        2026-07-12 斷線 5 天沒人發現的翻版，只是這次連 log 都不會再提醒。
+        """
         if self._alert_sent:
             return
-        self._alert_sent = True
         if self._alert_callback is None:
+            logger.warning("IG 斷線告警管道尚未接上（callback 未注入），本次僅記錄，稍後仍會重試")
             return
         try:
             await self._alert_callback(
@@ -105,6 +110,8 @@ class IGCookieProvider:
             )
         except Exception as e:
             logger.warning(f"IG 斷線告警發送失敗: {e}")
+            return
+        self._alert_sent = True
 
     def read_user_agent(self) -> Optional[str]:
         """取 cookies 誕生瀏覽器的 UA（sidecar 檔）；沒有回 None。"""

@@ -228,3 +228,81 @@ class TestLoginFailureMessageMapping:
 
         assert result.success is False
         assert result.error_message == dl_module.LOGIN_REQUIRED_MESSAGE
+
+
+class TestLoginFailureIsLogged:
+    """F12：acceptance 要求「Telegram 回覆與 log」兩邊都看得到可行動訊息。
+    Reel 是本專案主流程，維運者看 log tail 就該發現登入態斷了。"""
+
+    def test_reel_path_logs_actionable_message(self, tmp_path, monkeypatch, caplog):
+        import logging
+
+        import yt_dlp
+
+        from app.services import downloader as dl_module
+
+        monkeypatch.chdir(tmp_path)
+        (tmp_path / "cookies.txt").write_text("# manual", encoding="utf-8")
+        d = InstagramDownloader()
+
+        class FakeYDL:
+            def __init__(self, opts):
+                pass
+
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *a):
+                return False
+
+            def extract_info(self, url, download=True):
+                raise yt_dlp.utils.DownloadError(
+                    "ERROR: [Instagram] login_required: You need to log in"
+                )
+
+        monkeypatch.setattr(dl_module.yt_dlp, "YoutubeDL", FakeYDL)
+
+        with caplog.at_level(logging.WARNING, logger=dl_module.__name__):
+            result = d._download_sync(
+                "https://www.instagram.com/reel/ABC123xyz",
+                {"outtmpl": str(tmp_path / "x")},
+                None,
+            )
+
+        assert result.error_message == dl_module.LOGIN_REQUIRED_MESSAGE
+        assert dl_module.LOGIN_REQUIRED_MESSAGE in caplog.text
+
+    def test_reel_path_nonetype_signal_also_logs(self, tmp_path, monkeypatch, caplog):
+        """走 generic Exception 分支的 'NoneType' 訊號同樣要進 log。"""
+        import logging
+
+        from app.services import downloader as dl_module
+
+        monkeypatch.chdir(tmp_path)
+        (tmp_path / "cookies.txt").write_text("# manual", encoding="utf-8")
+        d = InstagramDownloader()
+
+        class FakeYDL:
+            def __init__(self, opts):
+                pass
+
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *a):
+                return False
+
+            def extract_info(self, url, download=True):
+                raise TypeError("'NoneType' object is not subscriptable")
+
+        monkeypatch.setattr(dl_module.yt_dlp, "YoutubeDL", FakeYDL)
+
+        with caplog.at_level(logging.WARNING, logger=dl_module.__name__):
+            result = d._download_sync(
+                "https://www.instagram.com/reel/ABC123xyz",
+                {"outtmpl": str(tmp_path / "x")},
+                None,
+            )
+
+        assert result.error_message == dl_module.LOGIN_REQUIRED_MESSAGE
+        assert dl_module.LOGIN_REQUIRED_MESSAGE in caplog.text
