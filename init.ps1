@@ -55,4 +55,10 @@ if (-not (Test-Path "cookies.txt")) {
 
 # 煙霧測試
 & $python -m pytest tests -q
+if ($LASTEXITCODE -ne 0) {
+    Write-Host ""
+    Write-Host "[smoke-test] init 失敗：套件都裝好了，但煙霧測試沒過——這是測試失敗，不是安裝失敗"
+    Write-Host "環境已安裝完成但尚未驗證通過，先看上方 pytest 輸出修掉失敗的測試再重跑 init.ps1"
+    exit 1
+}
 Write-Host "init OK — 服務由 mission-control 管理（reels-summarizer, port 8001），不要在這裡手動常駐"

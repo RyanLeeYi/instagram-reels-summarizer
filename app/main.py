@@ -27,6 +27,34 @@ logger = logging.getLogger(__name__)
 bot_handler = TelegramBotHandler()
 
 
+def make_ig_alert_callback(bot, chat_ids):
+    """建立 IG 斷線告警的送出管道：送給 chat_ids 全員，一則都沒送出去就拋出。
+
+    F24：**一定要在全數失敗時拋例外。** IGCookieProvider 的「同一段斷線只告警一次」
+    配額是看 callback 有沒有正常回來決定的（見 _alert_disconnected），所以在這裡把
+    每個 chat_id 的例外都吞掉、從不重新拋出，等於謊報送達——bot token 失效、
+    allowed_chat_ids 設錯或為空、全域斷網時，會變成一次都沒人收到卻永遠不再重試。
+    那正是 2026-07-12 斷線沒人發現事故的另一種形狀，只是從「log 沒人看」變成
+    「送達失敗被誤判成功」。至少一個 chat_id 收到才算送達。
+    """
+
+    async def _alert_ig_disconnected(message: str) -> None:
+        delivered = 0
+        failures = []
+        for chat_id in chat_ids:
+            try:
+                await bot.send_message(chat_id=chat_id, text=message)
+                delivered += 1
+            except Exception as e:
+                failures.append(f"chat_id={chat_id}: {e}")
+                logger.warning(f"IG 斷線告警發送失敗（chat_id={chat_id}）: {e}")
+        if delivered == 0:
+            detail = "; ".join(failures) or "allowed_chat_ids 為空，沒有可送達的對象"
+            raise RuntimeError(f"IG 斷線告警一則都沒送出，配額保留待下次重試：{detail}")
+
+    return _alert_ig_disconnected
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     """應用程式生命週期管理"""
@@ -65,14 +93,9 @@ async def lifespan(app: FastAPI):
     # F12(b)：IG cookie provider 斷線告警管道——走同一個 Telegram bot，
     # 送給 allowed_chat_ids 全員（provider 是 import 期建立的模組級單例，拿不到 bot，
     # 用同 retry_scheduler 的注入 pattern 補上）
-    async def _alert_ig_disconnected(message: str) -> None:
-        for chat_id in settings.allowed_chat_ids:
-            try:
-                await telegram_app.bot.send_message(chat_id=chat_id, text=message)
-            except Exception as e:
-                logger.warning(f"IG 斷線告警發送失敗（chat_id={chat_id}）: {e}")
-
-    ig_cookie_provider.set_alert_callback(_alert_ig_disconnected)
+    ig_cookie_provider.set_alert_callback(
+        make_ig_alert_callback(telegram_app.bot, settings.allowed_chat_ids)
+    )
 
     # 啟動排程器（如果啟用）
     if settings.retry_enabled:

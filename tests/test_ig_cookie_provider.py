@@ -3,6 +3,7 @@ import time
 
 import pytest
 
+from app.main import make_ig_alert_callback
 from app.services.ig_cookie_provider import IGCookieProvider
 
 
@@ -350,3 +351,77 @@ class TestDisconnectAlert:
 
         p = IGCookieProvider(cookies_file=target, fetch_cookies=fake_fetch)
         assert await p.refresh() is False
+
+
+class TestAlertFanOut:
+    """F24：告警扇出管道本身——全通道送出失敗不得被誤判成已送達。
+
+    provider 的「同一段斷線只告警一次」配額是由 callback 有沒有正常回來決定的
+    （見 TestDisconnectAlert）。所以真正的破口不在 provider，而在 main.py 那條
+    對每個 chat_id 各自 try/except 又從不重新拋出的扇出函式：bot token 失效、
+    allowed_chat_ids 設錯或為空、全域斷網時，一則都沒送出去卻回報成功，等於
+    這段斷線再也不會告警——2026-07-12 事故的另一種形狀。
+    """
+
+    class _FakeBot:
+        """只記錄 send_message 呼叫；fail_for 裡的 chat_id 會拋例外。"""
+
+        def __init__(self, fail_for=()):
+            self.fail_for = set(fail_for)
+            self.sent = []
+
+        async def send_message(self, chat_id, text):
+            if chat_id in self.fail_for:
+                raise RuntimeError(f"telegram unreachable for {chat_id}")
+            self.sent.append((chat_id, text))
+
+    @pytest.mark.asyncio
+    async def test_raises_when_every_chat_id_fails(self):
+        bot = self._FakeBot(fail_for=[111, 222])
+        alert = make_ig_alert_callback(bot, [111, 222])
+
+        with pytest.raises(RuntimeError):
+            await alert("斷線了")
+
+        assert bot.sent == []
+
+    @pytest.mark.asyncio
+    async def test_raises_when_no_chat_ids_configured(self):
+        """allowed_chat_ids 為空＝沒有任何人收得到，不能算送達。"""
+        bot = self._FakeBot()
+        alert = make_ig_alert_callback(bot, [])
+
+        with pytest.raises(RuntimeError):
+            await alert("斷線了")
+
+    @pytest.mark.asyncio
+    async def test_partial_success_counts_as_delivered(self):
+        """至少一個人收到就算送達，不該因為其他 chat_id 失敗而重複轟炸。"""
+        bot = self._FakeBot(fail_for=[111])
+        alert = make_ig_alert_callback(bot, [111, 222])
+
+        await alert("斷線了")  # 不得拋出
+
+        assert [chat_id for chat_id, _ in bot.sent] == [222]
+
+    @pytest.mark.asyncio
+    async def test_quota_not_burned_when_all_channels_fail(self, tmp_path):
+        """acceptance 主線：全通道失敗 → _alert_sent 仍為 False，下次 refresh 會再送。"""
+        target = tmp_path / "cookies.txt"
+        target.write_text("NO SESSION HERE", encoding="utf-8")
+
+        async def fake_fetch():
+            return [_pw_cookie("mid", "anon-only")], None
+
+        bot = self._FakeBot(fail_for=[111, 222])
+        p = IGCookieProvider(cookies_file=target, fetch_cookies=fake_fetch)
+        p.set_alert_callback(make_ig_alert_callback(bot, [111, 222]))
+
+        assert await p.refresh() is False
+        assert p._alert_sent is False, "一則都沒送出去卻把告警配額算掉了"
+
+        # 下次 refresh 必須再試一次；這次 Telegram 通了就該真的送出去
+        bot.fail_for = set()
+        assert await p.refresh() is False
+        assert p._alert_sent is True
+        assert [chat_id for chat_id, _ in bot.sent] == [111, 222]

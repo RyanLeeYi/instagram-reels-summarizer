@@ -1,6 +1,31 @@
 # Session Handoff
 
-> 最後更新：2026-08-23（F12／F15／F23 passing 並歸檔；新增 F24／F25 待簽核）
+> 最後更新：2026-08-27（F24／F25 passing 並歸檔；主檔剩餘 failing 只有已裁決的 F21）
+
+## 收官狀態（2026-08-27，agent-brief 無人看管 session）
+
+- **F24 passing、F25 passing**，各 1 輪獨立驗收即過、無 finding。兩條原文已搬進 `docs/archive/features.jsonl`（累計 23 條），主檔只剩 F21。
+- 全套 pytest **115 → 121 passed**（新增 6 條：F24 四條、F25 兩條 host parametrize）。
+- **主檔剩餘 failing 只有 F21**——已裁決、`superseded_by: F22`，當歷史紀錄留著，不再推進。
+
+### F24 的關鍵結論：告警的「送達」要由最外層那個人負責定義
+
+`IGCookieProvider` 的「同一段斷線只告警一次」配額，是**看 callback 有沒有正常回來**決定的。所以配額正不正確，取決於 `app/main.py` 那個扇出函式肯不肯在失敗時拋出去。原實作對每個 `chat_id` 各自 try/except 又從不 re-raise，等於對 provider 謊報送達。
+
+修法是抽出 `make_ig_alert_callback(bot, chat_ids)`：**`delivered == 0` 就 raise**，至少一個成功才安靜返回。**改這塊時不要把例外吞回去**——吞掉的那一刻，bot token 失效／`allowed_chat_ids` 設錯或為空／全域斷網這三種情況就會回到「一次都沒人收到卻永遠不再重試」。
+
+`allowed_chat_ids` 為空是 acceptance 明列的情境，走的是同一條路：沒有任何人收得到，就不算送達。
+
+### F25：F20 只修了一半，另一半在煙霧測試階段
+
+`init.ps1` 現在在 `pytest` 之後檢查 `$LASTEXITCODE`，非零就印 `[smoke-test]` 說明並 `exit 1`。**`[smoke-test]` 這個標記刻意用 ASCII**——兩個 PowerShell host 都以 cp950 輸出中文，測試端用 utf-8 收會變亂碼，中文斷言抓不到（與檔頭 F20 那條同一個坑）。
+
+`tests/test_init_script.py` 的 F25 測試是**真的跑一次 `init.ps1`**，不是比對腳本內容；離線建 venv 的手法是把主 venv 的 site-packages 用 `.pth` 掛進去，讓 `PIP_NO_INDEX` 下的 `pip install pytest` 變成「already satisfied」。要改這支測試前先讀那段 docstring。
+
+### F21 仍會出現在 dispatch 清單（狀態未變）
+
+`signed_off: true` + `failing` 的組合讓它每次都被列成「待做」。要讓它消失需要 harness 新增終態值，那需要 Ryan 認可，本 session 同樣沒動。
+
 
 ## 收官狀態（2026-08-23，agent-brief 無人看管 session）
 
