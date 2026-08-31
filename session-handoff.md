@@ -1,6 +1,6 @@
 # Session Handoff
 
-> 最後更新：2026-08-31（F26 `/backend` 切換摘要 backend、F28 其 inline keyboard 皆 passing 歸檔；主檔 failing：F21（歷史紀錄）、**F27 未簽核**——init.ps1 煙霧測試 pip 以 cp950 讀 requirements.txt 中文註解失敗，8/27 綠 8/31 紅，待查是 pip 版本還是 locale）
+> 最後更新：2026-08-31（F26 `/backend` 切換摘要 backend、F28 其 inline keyboard 皆 passing 歸檔；主檔 failing：F21（歷史紀錄）、**F27 已簽核（brief-me Sign off as-is，可派工）**——init.ps1 煙霧測試 pip 以 cp950 讀 requirements.txt 中文註解失敗，8/27 綠 8/31 紅，待查是 pip 版本還是 locale）
 
 ## 2026-08-31 摘要
 
