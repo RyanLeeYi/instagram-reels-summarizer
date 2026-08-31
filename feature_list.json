@@ -30,6 +30,22 @@
         "init.ps1",
         "tests/test_init_script.py"
       ]
+    },
+    {
+      "id": "F28",
+      "name": "/backend 無參數回覆附 inline keyboard 一鍵切換摘要 backend",
+      "acceptance": "F26 的 /backend 無參數回覆加上 inline keyboard。(1) ollama / claude / copilot 各一顆按鈕（來源 TelegramBotHandler.SUMMARIZER_BACKENDS），目前生效的 backend 標「(使用中)」，不可用的（check_summarizer_available 為 False）標「(不可用)」但仍可點。(2) 點按鈕 = 執行與 /backend <name> 完全相同的切換邏輯（抽成共用方法，文字參數與 callback 兩條入口呼叫同一個），包含 CLI 不可用退回 Ollama 時明講、以及「僅存在於程序記憶體、重啟回到 .env」那句；點完用 edit_message_text 更新同一則訊息，含實際生效 backend、模型與更新後的按鈕。(3) callback 走 _is_authorized 同一套，未授權回覆拒絕且不切換；callback_data 前綴 backend:，在 build_application 註冊 CallbackQueryHandler，pattern 不得與既有 reprocess:/skip 衝突。(4) 偽造的 callback_data（不在三者內）回用法說明不改現況。(5) 單元測試以 mock 取代真實 CLI／Ollama：按鈕三顆且標記正確、點 claude 後 handler.summarizer 型別改變、CLI 不可用點 claude 回覆含退回說明、未授權 callback 不切換、偽造名稱不切換；全套 pytest 除已知 F27（cp950）兩條外通過。",
+      "status": "failing",
+      "signed_off": true,
+      "evidence": "2026-08-31 Ryan 在 F26 上線後要求「弄成選項按鈕」。 2026-08-31 Ryan 簽核（/aad F28），acceptance 凍結。",
+      "rationale": "三個固定選項，按鈕比打字合適；共用切換方法是為了不讓文字與按鈕兩條路徑的退回邏輯漂移。",
+      "prerequisites": [
+        "F26"
+      ],
+      "touches": [
+        "app/bot/telegram_handler.py",
+        "tests/test_backend_command.py"
+      ]
     }
   ]
 }
