@@ -15,17 +15,20 @@
       ]
     },
     {
-      "id": "F26",
-      "name": "Telegram 指令即時切換摘要 backend",
-      "acceptance": "新增 Telegram 指令 /backend：(1) 無參數時回覆目前生效的摘要 backend 名稱（ollama/claude/copilot）與該 backend 使用的模型名（OLLAMA_MODEL / CLAUDE_MODEL / COPILOT_MODEL），以及三個 backend 各自的可用性（沿用 check_summarizer_available）。(2) /backend <ollama|claude|copilot> 在不重啟服務的前提下切換摘要 backend，切換後收到的下一則連結即用新 backend 產生摘要；回覆訊息必須寫出「實際生效」的 backend——若指定的 CLI 不可用而 factory 退回 Ollama，回覆要明講退回了 Ollama，不得只回顯使用者輸入。(3) 參數不在三者之內時回覆用法說明且不改變現況。(4) 未在 TELEGRAM_ALLOWED_CHAT_IDS 內的 chat 呼叫 /backend 一律拒絕，與 /start、/status 同一套授權。(5) /status 輸出加上目前生效的摘要 backend 與模型名。(6) 切換只存在於程序記憶體，服務重啟後回到 .env 的 SUMMARIZER_BACKEND；此行為在 /backend 的回覆中註明一句。(7) 單元測試以 mock 取代真實 CLI／Ollama，覆蓋：無參數查詢、合法切換後 handler 持有的 summarizer 型別改變、CLI 不可用退回 Ollama 時回覆內容含退回說明、非法參數不改變現況、未授權拒絕；全套 pytest 通過。",
+      "id": "F27",
+      "name": "init.ps1 煙霧測試：pip 以 cp950 讀 requirements.txt 中文註解失敗",
+      "acceptance": "tests/test_init_script.py 的 test_init_exits_nonzero_and_blames_the_tests_when_smoke_tests_fail[pwsh|powershell] 自 2026-08-27 全綠後，於 2026-08-31 在同一台機器失敗：init.ps1 跑 pip install -r requirements.txt 時 pip 以系統 cp950 codepage 解碼 requirements.txt 內中文註解，拋 UnicodeDecodeError，導致安裝階段先失敗、測試斷言的 [smoke-test] 標記從未出現。要求：找出 8/27 到 8/31 之間讓解碼行為改變的原因（pip 版本、requirements.txt 內容或 PowerShell locale）並修在根因；修法不得移除 requirements.txt 的中文註解以外的資訊；修後兩條測試在 pwsh 與 powershell 5.1 皆通過，且全套 pytest 通過。",
       "status": "failing",
-      "signed_off": true,
-      "evidence": "2026-08-31 Ryan 提出：目前摘要 backend 只能改 .env 後經 mission-control 重啟切換（F5），要改成 Telegram 指令即時切換。 2026-08-31 Ryan 簽核（/aad），acceptance 凍結。",
-      "prerequisites": [],
+      "signed_off": false,
+      "evidence": "2026-08-31 F26 執行與驗收時各自獨立觀察到，F26 未觸碰 init.ps1／requirements.txt。錯誤片段：UnicodeDecodeError: 'cp950' codec can't decode byte 0xe6 in position 2: illegal multibyte sequence，位於 pip req_command.get_requirements → parse_requirements。",
+      "rationale": "環境層回歸而非產品功能；不修的話 init.ps1 在中文 Windows 上裝不起來、F20／F25 的守門測試永久紅。取捨：最可能的最小修法是 requirements.txt 加 UTF-8 BOM 或註解改英文，但先確認是哪個環節變了再決定。",
+      "prerequisites": [
+        "F25"
+      ],
       "touches": [
-        "app/bot/telegram_handler.py",
-        "app/services/summarizer_factory.py",
-        "tests/test_backend_command.py"
+        "requirements.txt",
+        "init.ps1",
+        "tests/test_init_script.py"
       ]
     }
   ]
