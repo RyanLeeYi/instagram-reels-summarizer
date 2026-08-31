@@ -190,7 +190,8 @@ class TelegramBotHandler:
 ⚡ 指令：
 /start - 顯示此說明
 /status - 查看系統狀態
-/backend - 查詢或切換摘要 backend
+/backend - 查詢目前摘要 backend 與各家可用性
+/backend ollama|claude|copilot - 即時切換摘要 backend（重啟後回到 .env 設定）
 
 🔗 支援的連結格式：
 📸 Instagram
