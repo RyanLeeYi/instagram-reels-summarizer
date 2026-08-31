@@ -267,18 +267,42 @@ class TelegramBotHandler:
             await update.message.reply_text(
                 f"目前摘要 backend：{backend_name}（模型：{model_name}）\n\n"
                 f"各 backend 可用性：\n{avail_lines}\n\n"
-                f"用法：/backend <ollama|claude|copilot>"
+                f"用法：/backend <ollama|claude|copilot>",
+                reply_markup=self._build_backend_keyboard(backend_name, availability),
             )
             return
 
         requested = context.args[0].strip().lower()
         if requested not in self.SUMMARIZER_BACKENDS:
-            await update.message.reply_text(
-                "用法：/backend <ollama|claude|copilot>\n"
-                "參數不正確，目前設定未變更。"
-            )
+            await update.message.reply_text(self._backend_usage_text())
             return
 
+        await update.message.reply_text(self._switch_backend(requested))
+
+    def _backend_usage_text(self) -> str:
+        """/backend 參數不正確時的共用說明（文字指令與 callback 偽造名稱共用）"""
+        return "用法：/backend <ollama|claude|copilot>\n參數不正確，目前設定未變更。"
+
+    def _build_backend_keyboard(
+        self, current_backend: str, availability: dict
+    ) -> InlineKeyboardMarkup:
+        """組出 /backend 的 inline keyboard，標記目前生效與不可用的 backend"""
+        buttons = []
+        for name in self.SUMMARIZER_BACKENDS:
+            if name == current_backend:
+                label = f"{name} (使用中)"
+            elif not availability.get(name):
+                label = f"{name} (不可用)"
+            else:
+                label = name
+            buttons.append(InlineKeyboardButton(label, callback_data=f"backend:{name}"))
+        return InlineKeyboardMarkup([buttons])
+
+    def _switch_backend(self, requested: str) -> str:
+        """切換摘要 backend 並回傳說明文字——文字指令與 callback 按鈕共用同一套邏輯
+
+        只更新程序記憶體內的設定，不寫回 .env；服務重啟後回到 .env 的設定。
+        """
         settings.summarizer_backend = requested
         self.summarizer = get_summarizer()
         effective_backend, effective_model = describe_summarizer(self.summarizer)
@@ -288,7 +312,7 @@ class TelegramBotHandler:
         else:
             note = f"已切換摘要 backend 為 {effective_backend}"
 
-        await update.message.reply_text(
+        return (
             f"{note}（模型：{effective_model}）\n"
             "下一則連結將以此 backend 產生摘要。\n"
             "此切換僅存在於程序記憶體，服務重啟後會回到 .env 的 SUMMARIZER_BACKEND。"
@@ -1307,6 +1331,31 @@ class TelegramBotHandler:
             await self.process_url(url, chat_id, processing_message)
             return
 
+    async def handle_backend_callback(
+        self, update: Update, context: ContextTypes.DEFAULT_TYPE
+    ) -> None:
+        """處理 /backend inline keyboard 按鈕：與文字指令 /backend <name> 共用切換邏輯"""
+        query = update.callback_query
+        await query.answer()
+
+        chat_id = str(update.effective_chat.id)
+        if not self._is_authorized(chat_id):
+            await query.edit_message_text("您沒有使用此 Bot 的權限。")
+            return
+
+        requested = query.data[len("backend:"):]
+        if requested not in self.SUMMARIZER_BACKENDS:
+            await query.edit_message_text(self._backend_usage_text())
+            return
+
+        reply_text = self._switch_backend(requested)
+        backend_name, _ = describe_summarizer(self.summarizer)
+        availability = check_summarizer_available()
+        await query.edit_message_text(
+            reply_text,
+            reply_markup=self._build_backend_keyboard(backend_name, availability),
+        )
+
     def build_application(self) -> Application:
         """建立並設定 Telegram Application"""
         # 設定更寬裕的網路超時（預設 5 秒太短）
@@ -1335,6 +1384,10 @@ class TelegramBotHandler:
         )
 
         # 註冊 inline keyboard 回調處理器
+        # /backend 按鈕（backend:）獨立註冊，需排在通用 handler 之前才會優先比對到
+        self.application.add_handler(
+            CallbackQueryHandler(self.handle_backend_callback, pattern=r"^backend:")
+        )
         self.application.add_handler(CallbackQueryHandler(self.handle_callback_query))
 
         # 註冊全域錯誤處理器
