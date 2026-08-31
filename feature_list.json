@@ -13,23 +13,6 @@
       "touches": [
         "app/services/antigravity_visual_analyzer.py"
       ]
-    },
-    {
-      "id": "F27",
-      "name": "init.ps1 煙霧測試：pip 以 cp950 讀 requirements.txt 中文註解失敗",
-      "acceptance": "tests/test_init_script.py 的 test_init_exits_nonzero_and_blames_the_tests_when_smoke_tests_fail[pwsh|powershell] 自 2026-08-27 全綠後，於 2026-08-31 在同一台機器失敗：init.ps1 跑 pip install -r requirements.txt 時 pip 以系統 cp950 codepage 解碼 requirements.txt 內中文註解，拋 UnicodeDecodeError，導致安裝階段先失敗、測試斷言的 [smoke-test] 標記從未出現。要求：找出 8/27 到 8/31 之間讓解碼行為改變的原因（pip 版本、requirements.txt 內容或 PowerShell locale）並修在根因；修法不得移除 requirements.txt 的中文註解以外的資訊；修後兩條測試在 pwsh 與 powershell 5.1 皆通過，且全套 pytest 通過。",
-      "status": "failing",
-      "signed_off": true,
-      "evidence": "2026-08-31 F26 執行與驗收時各自獨立觀察到，F26 未觸碰 init.ps1／requirements.txt。錯誤片段：UnicodeDecodeError: 'cp950' codec can't decode byte 0xe6 in position 2: illegal multibyte sequence，位於 pip req_command.get_requirements → parse_requirements。 2026-08-31 Ryan 於 agent-brief 回覆「Sign off as-is」（卡 32e87e94），acceptance 依原草案凍結。",
-      "rationale": "環境層回歸而非產品功能；不修的話 init.ps1 在中文 Windows 上裝不起來、F20／F25 的守門測試永久紅。取捨：最可能的最小修法是 requirements.txt 加 UTF-8 BOM 或註解改英文，但先確認是哪個環節變了再決定。",
-      "prerequisites": [
-        "F25"
-      ],
-      "touches": [
-        "requirements.txt",
-        "init.ps1",
-        "tests/test_init_script.py"
-      ]
     }
   ]
 }

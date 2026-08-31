@@ -1,6 +1,36 @@
 # Session Handoff
 
-> 最後更新：2026-08-31（F26 `/backend` 切換摘要 backend、F28 其 inline keyboard 皆 passing 歸檔；主檔 failing：F21（歷史紀錄）、**F27 已簽核（brief-me Sign off as-is，可派工）**——init.ps1 煙霧測試 pip 以 cp950 讀 requirements.txt 中文註解失敗，8/27 綠 8/31 紅，待查是 pip 版本還是 locale）
+> 最後更新：2026-08-31（第二場，agent-brief 無人看管 session）。**F27 passing 並歸檔，主檔 failing 只剩 F21（已裁決的歷史紀錄，不再推進）——沒有待做工作。**
+
+## 收官狀態（2026-08-31 第二場，agent-brief 無人看管 session）
+
+- **F27 passing**，1 輪獨立驗收即過（R1-R5 全 pass、零 finding），原文已搬進 `docs/archive/features.jsonl`（累計 26 條）。
+- 全套 pytest **130 passed + 2 failed -> 133 passed**（新增 1 條守門測試）。
+- 主檔剩下的只有 F21，已裁決 `superseded_by: F22`，**沒有待做工作**。
+
+### F27 的關鍵結論：綠不綠取決於「誰建的 venv」，程式從頭到尾沒變
+
+`tests/test_init_script.py` 用 `venv.create(with_pip=True)` 建臨時 venv，**裡面的 pip 版本來自基底 Python 的 ensurepip**，不是主 venv 的 pip。而 pip 在 25.1 換過解碼演算法：
+
+| pip | 解碼 requirements 檔的順序 |
+|---|---|
+| < 25.1（`utils/encoding.py::auto_decode`） | BOM -> PEP-263 註解 -> **locale**（中文 Windows = cp950，中文註解直接炸） |
+| >= 25.1（`req_file.py::_decode_req_file`） | BOM -> PEP-263 註解 -> **先試 UTF-8** -> 才 fallback locale |
+
+8/27 F25 是在 executor worktree 跑的，那個 `.venv` 基底是 uv cpython-3.12.11（ensurepip **25.0.1**）故全綠；主工作區 `.venv` 基底是 Python 3.13.0（ensurepip **24.2**）故 8/31 一跑就紅。`requirements.txt`、`init.ps1`、系統 ACP 全程沒動過。**這是潛伏的環境相依 bug，不是 8/27-8/31 之間的回歸**——所以「找 8/27 到 8/31 之間改了什麼」這個問法本身會找不到東西，要問的是「兩次是誰跑的」。
+
+**連帶暴露的產品層問題比測試本身嚴重**：repo 自己的 `requirements.txt` 帶中文註解又沒宣告編碼，所以任何 pip < 25.1 的中文 Windows 上，`init.ps1` 一個套件都裝不起來。
+
+修法是 `requirements.txt` 首行加 `# -*- coding: utf-8 -*-`——**新舊 pip 都在檢查 locale 之前先認這行**，所以一行同時修好兩個版本，中文註解與套件條目一行未刪。BOM 也可以，但刻意不用：真的有 pip 改成純 `utf-8` 讀檔的話，BOM 會讓第一行變成 `﻿#` 而不再是註解，cookie 則永遠只是一行註解。
+
+**兩個測試 fixture 自己也踩同一個根因**，已一併補上宣告。注意 `test_init_exits_nonzero_and_names_the_package_when_pip_fails` **原本是誤打誤撞才綠的**：pip 解碼就掛了 -> `Find-FailedRequirements` 逐條重跑 -> 剛好列出那個不存在的套件 -> 斷言過。它驗的從來不是它以為在驗的東西，補上宣告後才真的走 pip 正常解析。
+
+### 改這塊之前要知道的
+
+- `requirements.txt` 的首行宣告**不要拿掉**，`test_requirements_txt_declares_its_encoding` 會擋（對舊檔實測為紅）。
+- 想在任何 requirements 類檔案加中文，先確認同一份檔案前兩行有 PEP-263 宣告。
+- 有殘留的舊 worktree `.claude/worktrees/agent-a1c81e2ae036ce28a`（基底 Python 3.12.11、帶自己的 `.venv`、init.ps1 還是 F20 之前的版本）。**它就是 8/27 那個綠掉的環境**，留著當證據沒關係，但別拿它跑測試當基準。
+
 
 ## 2026-08-31 摘要
 

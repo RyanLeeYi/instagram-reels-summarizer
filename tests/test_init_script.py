@@ -10,7 +10,9 @@
    fail-open（實測 exit 0 且印 init OK）。只測 pwsh 的話這條測試永遠不會紅。
 """
 
+import codecs
 import os
+import re
 import shutil
 import subprocess
 import sysconfig
@@ -24,6 +26,10 @@ INIT_SCRIPT = REPO_ROOT / "init.ps1"
 
 IMPOSSIBLE_PACKAGE = "reels-summarizer-no-such-package==9.9.9"
 
+# F27：pip < 25.1 用 locale（中文 Windows = cp950）解碼 requirements 檔，中文註解會炸。
+# 新舊 pip 都認 PEP-263 宣告，所以真檔與這裡的假檔都在第一行宣告一次。
+ENCODING_COOKIE = "# -*- coding: utf-8 -*-\n"
+
 POWERSHELL_HOSTS = [exe for exe in ("pwsh", "powershell") if shutil.which(exe)]
 
 
@@ -32,7 +38,8 @@ POWERSHELL_HOSTS = [exe for exe in ("pwsh", "powershell") if shutil.which(exe)]
 def test_init_exits_nonzero_and_names_the_package_when_pip_fails(tmp_path, host):
     shutil.copy(INIT_SCRIPT, tmp_path / "init.ps1")
     (tmp_path / "requirements.txt").write_text(
-        f"# 註解行不該被當成套件\n\n{IMPOSSIBLE_PACKAGE}\n", encoding="utf-8"
+        f"{ENCODING_COOKIE}# 註解行不該被當成套件\n\n{IMPOSSIBLE_PACKAGE}\n",
+        encoding="utf-8",
     )
     # init.ps1 走「venv 已存在」分支；要帶 pip，pip 才有東西可失敗
     venv.create(tmp_path / ".venv", with_pip=True)
@@ -66,6 +73,27 @@ def test_init_script_has_utf8_bom():
     assert INIT_SCRIPT.read_bytes().startswith(b"\xef\xbb\xbf")
 
 
+def test_requirements_txt_declares_its_encoding():
+    """requirements.txt 有非 ASCII 內容就必須自己宣告編碼，否則 pip 拿 locale 去解。
+
+    pip < 25.1 的解碼順序是 BOM -> PEP-263 註解 -> locale。中文 Windows 的 locale 是 cp950，
+    所以檔裡的中文註解會讓 `pip install -r` 在解析階段就 UnicodeDecodeError，init.ps1 一個
+    套件都裝不起來。pip >= 25.1 改成先試 UTF-8，但兩個版本都認 PEP-263 註解。
+
+    F27 之所以 8/27 綠、8/31 紅：executor worktree 的 venv 建出來的臨時 venv 帶 pip 25.0.1
+    （會過），主工作區 .venv（Python 3.13.0）建出來的帶 pip 24.2（會炸）。綠不綠取決於是誰
+    建的 venv，不是程式改了什麼——所以要把「檔頭有宣告」這件事釘住。
+    """
+    data = (REPO_ROOT / "requirements.txt").read_bytes()
+    if data.isascii():
+        return
+
+    head = b"\n".join(data.split(b"\n")[:2])
+    assert data.startswith(codecs.BOM_UTF8) or re.search(
+        rb"coding[:=]\s*utf-8", head, re.IGNORECASE
+    ), "requirements.txt 有非 ASCII 內容卻沒在前兩行宣告編碼，舊 pip 會用 cp950 解碼失敗"
+
+
 def _venv_with_host_pytest(root: Path) -> None:
     r"""在 root 下建一個離線就有 pytest 的 venv。
 
@@ -96,7 +124,9 @@ def test_init_exits_nonzero_and_blames_the_tests_when_smoke_tests_fail(tmp_path,
     """
     shutil.copy(INIT_SCRIPT, tmp_path / "init.ps1")
     # 註解行以外沒有套件 -> 離線也裝得完，讓流程走到煙霧測試那一步
-    (tmp_path / "requirements.txt").write_text("# 本測試不裝任何東西\n", encoding="utf-8")
+    (tmp_path / "requirements.txt").write_text(
+        f"{ENCODING_COOKIE}# 本測試不裝任何東西\n", encoding="utf-8"
+    )
     # .env 已存在就不會走 Copy-Item .env.example（那會在 $ErrorActionPreference=Stop 下中斷）
     (tmp_path / ".env").write_text("", encoding="utf-8")
     (tmp_path / "tests").mkdir()
