@@ -33,23 +33,25 @@ def get_summarizer() -> Union["OllamaSummarizer", "ClaudeCodeSummarizer", "Copil
     
     if backend == "claude":
         from app.services.claude_summarizer import ClaudeCodeSummarizer, check_claude_cli_available
-        
+
         if check_claude_cli_available():
             logger.info(f"使用 Claude Code CLI 作為摘要服務 (model={settings.claude_model})")
             return ClaudeCodeSummarizer(model=settings.claude_model)
         else:
             logger.warning("Claude Code CLI 不可用，fallback 到 Ollama")
+            settings.summarizer_backend = "ollama"
             from app.services.summarizer import OllamaSummarizer
             return OllamaSummarizer()
-    
+
     elif backend == "copilot":
         from app.services.copilot_summarizer import CopilotCLISummarizer, check_copilot_cli_available
-        
+
         if check_copilot_cli_available():
             logger.info(f"使用 Copilot CLI 作為摘要服務 (model={settings.copilot_model})")
             return CopilotCLISummarizer(model=settings.copilot_model)
         else:
             logger.warning("Copilot CLI 不可用，fallback 到 Ollama")
+            settings.summarizer_backend = "ollama"
             from app.services.summarizer import OllamaSummarizer
             return OllamaSummarizer()
     
@@ -57,6 +59,25 @@ def get_summarizer() -> Union["OllamaSummarizer", "ClaudeCodeSummarizer", "Copil
         from app.services.summarizer import OllamaSummarizer
         logger.info(f"使用 Ollama 作為摘要服務 (model={settings.ollama_model})")
         return OllamaSummarizer()
+
+
+def describe_summarizer(summarizer) -> tuple[str, str]:
+    """回傳 summarizer 實例「實際生效」的 backend 名稱與模型名
+
+    判定依實例型別，不依賴 settings 值——factory 在指定的 CLI 不可用時
+    會退回 Ollama，此時只有型別才反映真正在跑的是哪一個 backend。
+
+    Returns:
+        (backend, model): backend 為 "ollama" / "claude" / "copilot"
+    """
+    from app.services.claude_summarizer import ClaudeCodeSummarizer
+    from app.services.copilot_summarizer import CopilotCLISummarizer
+
+    if isinstance(summarizer, ClaudeCodeSummarizer):
+        return "claude", summarizer.model
+    if isinstance(summarizer, CopilotCLISummarizer):
+        return "copilot", summarizer.model
+    return "ollama", summarizer.model
 
 
 def check_summarizer_available() -> dict:

@@ -24,7 +24,11 @@ from app.services.threads_downloader import (
     ThreadsMediaDownloadResult,
 )
 from app.services.transcriber import WhisperTranscriber
-from app.services.summarizer_factory import get_summarizer
+from app.services.summarizer_factory import (
+    get_summarizer,
+    describe_summarizer,
+    check_summarizer_available,
+)
 from app.services.roam_sync import RoamSyncService
 from app.services.visual_analyzer import VideoVisualAnalyzer
 from app.services.download_logger import DownloadLogger
@@ -59,6 +63,9 @@ class TelegramBotHandler:
     THREADS_URL_PATTERN = re.compile(
         r"https?://(?:www\.)?threads\.(?:net|com)/(?:@[\w.]+/post|t|share)/([A-Za-z0-9_-]+)"
     )
+
+    # /backend 指令允許切換的摘要 backend
+    SUMMARIZER_BACKENDS = ("ollama", "claude", "copilot")
 
     def __init__(self):
         self.downloader = InstagramDownloader()
@@ -183,6 +190,7 @@ class TelegramBotHandler:
 ⚡ 指令：
 /start - 顯示此說明
 /status - 查看系統狀態
+/backend - 查詢或切換摘要 backend
 
 🔗 支援的連結格式：
 📸 Instagram
@@ -219,14 +227,71 @@ class TelegramBotHandler:
             )
             pending_count = result.scalar() or 0
 
+        backend_name, model_name = describe_summarizer(self.summarizer)
+
         status_message = f"""📊 系統狀態
 
 ✅ Bot 運作正常
 ⏳ 待重試任務：{pending_count} 個
 ⏰ 重試間隔：每 {settings.retry_interval_hours} 小時
-🔄 最大重試次數：{settings.max_retry_count} 次"""
+🔄 最大重試次數：{settings.max_retry_count} 次
+
+摘要 backend：{backend_name}（模型：{model_name}）"""
 
         await update.message.reply_text(status_message)
+
+    async def backend_command(
+        self, update: Update, context: ContextTypes.DEFAULT_TYPE
+    ) -> None:
+        """處理 /backend 指令：查詢或切換摘要 backend（不重啟服務）
+
+        無參數：回覆目前生效的 backend、模型名，以及三個 backend 的可用性。
+        帶參數：切換 backend；若指定的 CLI 不可用，factory 會退回 Ollama，
+        回覆必須明講退回了 Ollama，不能只回顯使用者輸入的參數。
+        切換只存在於程序記憶體，不寫回 .env，服務重啟後回到 .env 的設定。
+        """
+        chat_id = str(update.effective_chat.id)
+
+        if not self._is_authorized(chat_id):
+            await update.message.reply_text("您沒有使用此 Bot 的權限。")
+            return
+
+        if not context.args:
+            backend_name, model_name = describe_summarizer(self.summarizer)
+            availability = check_summarizer_available()
+            avail_lines = "\n".join(
+                f"- {name}：{'可用' if availability.get(name) else '不可用'}"
+                for name in self.SUMMARIZER_BACKENDS
+            )
+            await update.message.reply_text(
+                f"目前摘要 backend：{backend_name}（模型：{model_name}）\n\n"
+                f"各 backend 可用性：\n{avail_lines}\n\n"
+                f"用法：/backend <ollama|claude|copilot>"
+            )
+            return
+
+        requested = context.args[0].strip().lower()
+        if requested not in self.SUMMARIZER_BACKENDS:
+            await update.message.reply_text(
+                "用法：/backend <ollama|claude|copilot>\n"
+                "參數不正確，目前設定未變更。"
+            )
+            return
+
+        settings.summarizer_backend = requested
+        self.summarizer = get_summarizer()
+        effective_backend, effective_model = describe_summarizer(self.summarizer)
+
+        if effective_backend != requested:
+            note = f"{requested} 不可用，已退回使用 {effective_backend}"
+        else:
+            note = f"已切換摘要 backend 為 {effective_backend}"
+
+        await update.message.reply_text(
+            f"{note}（模型：{effective_model}）\n"
+            "下一則連結將以此 backend 產生摘要。\n"
+            "此切換僅存在於程序記憶體，服務重啟後會回到 .env 的 SUMMARIZER_BACKEND。"
+        )
 
     async def handle_message(
         self, update: Update, context: ContextTypes.DEFAULT_TYPE
@@ -1261,6 +1326,7 @@ class TelegramBotHandler:
         # 註冊指令處理器
         self.application.add_handler(CommandHandler("start", self.start_command))
         self.application.add_handler(CommandHandler("status", self.status_command))
+        self.application.add_handler(CommandHandler("backend", self.backend_command))
 
         # 註冊訊息處理器
         self.application.add_handler(
