@@ -1,6 +1,14 @@
 # Session Handoff
 
-> 最後更新：2026-08-27（F24／F25 passing 並歸檔；主檔剩餘 failing 只有已裁決的 F21）
+> 最後更新：2026-08-31（F26 `/backend` 切換摘要 backend、F28 其 inline keyboard 皆 passing 歸檔；主檔 failing：F21（歷史紀錄）、**F27 未簽核**——init.ps1 煙霧測試 pip 以 cp950 讀 requirements.txt 中文註解失敗，8/27 綠 8/31 紅，待查是 pip 版本還是 locale）
+
+## 2026-08-31 摘要
+
+- F26：`/backend` 無參數查詢、`/backend <name>` 即時切換（只存記憶體，重啟回 .env），`describe_summarizer()` 依實例型別回報實際生效；factory fallback 分支同步回寫 settings。
+- F28：`/backend` 無參數回覆帶三顆按鈕（使用中／不可用標記），`_switch_backend` 為文字與 callback 共用；pattern `^backend:` 註冊在通用 CallbackQueryHandler 之前。
+- 測試基準 130 passed + 2 failed（F27）。服務由中台重啟後已線上驗證 `/backend`。
+- 已知：F27 兩條紅測試不是 F26/F28 造成；F26 未授權回覆少一個 emoji 前綴（hook 擋新字串 emoji），授權邏輯相同。
+
 
 ## 收官狀態（2026-08-27，agent-brief 無人看管 session）
 
